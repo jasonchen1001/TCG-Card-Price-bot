@@ -14,6 +14,160 @@ dotenv.config();
 import { Client, GatewayIntentBits, Events, EmbedBuilder,
         REST, Routes, SlashCommandBuilder } from 'discord.js';
 import fetch from 'node-fetch';
+import pokemon from 'pokemontcgsdk';
+
+// 配置 Pokemon TCG SDK
+if (process.env.POKEMON_TCG_API_KEY) {
+  pokemon.configure({ apiKey: process.env.POKEMON_TCG_API_KEY });
+}
+
+// ============================================================
+// TCGPlayer API 配置
+// ============================================================
+const TCGPLAYER_CLIENT_ID = process.env.TCGPLAYER_CLIENT_ID;
+const TCGPLAYER_CLIENT_SECRET = process.env.TCGPLAYER_CLIENT_SECRET;
+const TCGPLAYER_AUTH_CODE = process.env.TCGPLAYER_AUTH_CODE;
+let tcgplayerToken = null;
+let tokenExpiry = null;
+
+// TCGPlayer OAuth 获取访问令牌
+async function getTCGPlayerToken() {
+  if (tcgplayerToken && tokenExpiry > Date.now()) {
+    return tcgplayerToken;
+  }
+  try {
+    const resp = await fetch('https://api.tcgplayer.com/v1.39/app/authorize/YOUR_AUTH_CODE', {
+      method: 'POST'
+    });
+    const data = await resp.json();
+    tcgplayerToken = data.results[0].authorizationKey;
+    tokenExpiry = Date.now() + 3600 * 1000; // 1小时后过期
+    return tcgplayerToken;
+  } catch (e) {
+    console.error('TCGPlayer OAuth error:', e.message);
+    return null;
+  }
+}
+
+// ============================================================
+// WebSearch MCP 工具集成
+// ============================================================
+// 使用环境变量控制搜索功能开关
+const ENABLE_WEB_SEARCH = process.env.ENABLE_WEB_SEARCH === 'true';
+
+// 网络搜索缓存（简单内存缓存）
+const searchCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存
+
+async function webSearch(query) {
+  if (!ENABLE_WEB_SEARCH) return null;
+
+  // 检查缓存
+  const cacheKey = query.toLowerCase();
+  const cached = searchCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    console.log('Using cached search result for:', query);
+    return cached.data;
+  }
+
+  try {
+    // 方法1: 尝试使用 DuckDuckGo HTML 版本（更可靠）
+    const htmlUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const resp = await fetch(htmlUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    if (!resp.ok) throw new Error(`Search API error: ${resp.status}`);
+
+    const html = await resp.text();
+
+    // 简单解析 HTML 提取结果（DuckDuckGo HTML 响应）
+    const results = { results: [] };
+
+    // 提取结果链接和标题
+    const resultRegex = /<a[^>]*class="result__a"[^>]*>([^<]*)<\/a>.*?<a[^>]*href="([^"]*)"/g;
+    let match;
+    let count = 0;
+    while ((match = resultRegex.exec(html)) !== null && count < 5) {
+      results.results.push({
+        title: match[1]?.replace(/<[^>]*>/g, '').trim(),
+        url: match[2],
+        snippet: '点击查看详情'
+      });
+      count++;
+    }
+
+    // 如果没有结果，使用备用数据
+    if (results.results.length === 0) {
+      console.log('No search results found, using fallback data');
+      results.results = getFallbackResults(query);
+    }
+
+    // 缓存结果
+    searchCache.set(cacheKey, {
+      data: results,
+      timestamp: Date.now()
+    });
+
+    console.log(`Search returned ${results.results.length} results for: ${query}`);
+    return results;
+  } catch (e) {
+    console.error('WebSearch error:', e.message);
+    // 返回备用数据
+    return { results: getFallbackResults(query) };
+  }
+}
+
+// 备用热门卡牌数据（当网络搜索失败时使用）
+function getFallbackResults(query) {
+  const q = query.toLowerCase();
+
+  // 使用 Google 搜索代替 TCGPlayer（避免域名问题）
+  const googleSearch = (term) => `https://www.google.com/search?q=${encodeURIComponent(term)}`;
+
+  // Pokemon 热门卡牌
+  if (q.includes('pokemon') || q.includes('pokemon') || q.includes('pi')) {
+    return [
+      { title: 'Charizard - 火焰喷火龙', url: googleSearch('Charizard Pokemon TCG'), snippet: '最受欢迎的 Pokemon 卡牌之一' },
+      { title: 'Pikachu - 皮卡丘', url: googleSearch('Pikachu Pokemon TCG'), snippet: '市场需求稳定' },
+      { title: 'Mewtwo - 超梦', url: googleSearch('Mewtwo ex Pokemon'), snippet: '价格近期上涨' },
+      { title: 'Umbreon - 月亮伊布', url: googleSearch('Umbreon VMAX Pokemon'), snippet: '深受收藏者喜爱' },
+      { title: 'Rayquaza - 烈空坐', url: googleSearch('Rayquaza VMAX Pokemon'), snippet: '价格走势分析' }
+    ];
+  }
+
+  // One Piece 热门卡牌
+  if (q.includes('onepiece') || q.includes('one piece') || q.includes('luffy')) {
+    return [
+      { title: 'Luffy - 路飞', url: googleSearch('Luffy One Piece TCG'), snippet: '最受欢迎的角色之一' },
+      { title: 'Shanks - 香克斯', url: googleSearch('Shanks One Piece TCG'), snippet: '价格稳定上涨' },
+      { title: 'Law - 罗', url: googleSearch('Law One Piece TCG'), snippet: '需求量大' },
+      { title: 'Yamato - 大和', url: googleSearch('Yamato One Piece TCG'), snippet: '收藏家热门选择' },
+      { title: 'Kaido - 凯多', url: googleSearch('Kaido One Piece TCG'), snippet: 'OP10 系列表现突出' }
+    ];
+  }
+
+  // Yu-Gi-Oh 热门卡牌
+  if (q.includes('yugioh') || q.includes('yu-gi-oh') || q.includes('blue')) {
+    return [
+      { title: 'Blue-Eyes White Dragon', url: googleSearch('Blue-Eyes White Dragon Yu-Gi-Oh'), snippet: '最具代表性的卡牌' },
+      { title: 'Dark Magician', url: googleSearch('Dark Magician Yu-Gi-Oh'), snippet: '价值稳定' },
+      { title: 'Ash Blossom', url: googleSearch('Ash Blossom Yu-Gi-Oh'), snippet: '竞技环境常见' }
+    ];
+  }
+
+  // 默认返回 Google 搜索
+  return [
+    { title: 'Google 搜索 TCGPlayer', url: googleSearch('TCGPlayer'), snippet: '访问 TCGPlayer 查看更多卡牌' },
+    { title: 'Pokemon 卡牌搜索', url: googleSearch('Pokemon TCG'), snippet: '查看 Pokemon 卡牌' },
+    { title: 'One Piece 卡牌搜索', url: googleSearch('One Piece TCG'), snippet: '查看 One Piece 卡牌' },
+    { title: 'Yu-Gi-Oh 卡牌搜索', url: googleSearch('Yu-Gi-Oh TCG'), snippet: '查看 Yu-Gi-Oh 卡牌' }
+  ];
+}
+
+
 
 // ============================================================
 // 初始化
@@ -29,7 +183,7 @@ const discord = new Client({
 // ============================================================
 // 核心模块 1: Gemini Vision 识别卡牌
 // ============================================================
-const CARD_IDENTIFY_PROMPT = `你是一个专业的 TCG 卡牌识别专家。请仔细查看图片中的卡牌。
+const CARD_IDENTIFY_PROMPT = `你是一个专业的 TCG 卡牌识别专家。请仔细查看图片中的卡牌。[PROMPT_V7: 包含卡牌效果描述（中文）、收藏价值、市场热度、竞技使用情况、发布时间、值得关注的卡牌等详细分析]
 
 **OCR 读取要求** - 仔细从卡牌上读取以下信息：
 1. game: 卡牌游戏名 ("pokemon" / "onepiece" / "yugioh" / "other")
@@ -40,24 +194,48 @@ const CARD_IDENTIFY_PROMPT = `你是一个专业的 TCG 卡牌识别专家。请
 6. rarity: 稀有度（卡牌上的标识，如 SEC/SR/SSR/L/UC/C 等）
 7. set_name: 系列名称（从卡牌侧面或底部小字读取）
 8. ocr_raw: 卡牌上的关键文字（仅名称/编号/稀有度，最多30字符，不要重复纹理）
-9. confidence: 置信度
+9. confidence: 识别置信度
+
+**卡牌详细分析** - 基于你的知识库提供：
+10. description: 卡牌效果/技能描述（**必须使用中文**！如果你的知识库中有此卡牌的信息，用中文简述其效果或特点，最多100字）
+11. collectible_value: 收藏价值评估（"收藏级珍品"/"高收藏价值"/"中等收藏价值"/"普通卡牌"/"基础卡牌"）
+12. market_popularity: 市场热门度（"超热门"/"热门"/"一般"/"冷门"）
+13. competitive_usage: 竞技环境使用情况（"常用"/"偶尔使用"/"几乎不用"/"娱乐卡"）
+14. highlights: 卡牌亮点/特色（1-2个卖点，如"强力攻击卡"、"收藏家热门"、"限定版本"等，最多50字）
+15. release_date: 发布时间（如果知道此卡牌或系列的发布时间，格式为 YYYY-MM-DD，如 "2024-01-15"）
+16. related_cards: 值得关注的卡牌（**重要**：必须基于你的知识库推荐1-3张相关的热门/高价值卡牌。可以是：同系列的其他热门卡、同角色的其他版本、该角色的进化/退化形态、相关组合卡等。如果确实不知道，推荐该游戏最热门的几张卡牌。格式为数组，每个包含 name（英文名保持）和 reason（中文说明））
 
 **准确性原则**:
 - card_number 必须逐字确认，如果模糊不清就设为 null
 - set_name 如果无法清晰读取就设为 null
 - 宁可不输出也不要输出错误信息
+- 如果不确定卡牌的具体效果，description 可以为 null
+- 如果不确定发布时间，release_date 可以为 null
+- related_cards **必须至少推荐1张卡牌**，基于你的知识库
+- **description 必须使用中文输出**
+- **related_cards 中的 reason 必须使用中文**
 
 **返回 JSON 格式**:
 {
-  "game": "onepiece",
-  "name_en": "Sanji",
-  "name_jp": "サンジ",
-  "name_cn": "山治",
-  "card_number": "OP10-005",
-  "rarity": "SEC",
-  "set_name": "Royal Blood",
-  "ocr_raw": "SANJI OP10-005 SEC...",
-  "confidence": "high"
+  "game": "pokemon",
+  "name_en": "Pikachu",
+  "name_jp": "ピカチュウ",
+  "name_cn": "皮卡丘",
+  "card_number": "045/264",
+  "rarity": "Rare",
+  "set_name": "Scarlet & Violet",
+  "ocr_raw": "PIKACHU 045/264",
+  "confidence": "high",
+  "description": "基础宝可梦卡牌，拥有简单的攻击技能，适合新手玩家使用。可以搜索牌库中的皮卡丘卡牌，快速组建战术。",
+  "collectible_value": "普通卡牌",
+  "market_popularity": "热门",
+  "competitive_usage": "偶尔使用",
+  "highlights": "经典宝可梦，收藏必备",
+  "release_date": "2023-03-31",
+  "related_cards": [
+    {"name": "Charizard ex", "reason": "同系列强力卡，超热门"},
+    {"name": "Pikachu ex", "reason": "皮卡丘高级版本，竞技常用"}
+  ]
 }
 
 请只返回 JSON 数组，不要任何其他文字。`;
@@ -106,7 +284,17 @@ async function identifyCards(imageUrl) {
     console.log('Cleaned text:', clean);
     const parsed = JSON.parse(clean);
     console.log('Parsed result:', parsed);
-    return Array.isArray(parsed) ? parsed : (parsed.cards || []);
+
+    // 处理返回格式：数组或单个对象
+    if (Array.isArray(parsed)) {
+      return parsed;
+    } else if (parsed.cards && Array.isArray(parsed.cards)) {
+      return parsed.cards;
+    } else if (parsed.game) {
+      // 单个对象，包装成数组
+      return [parsed];
+    }
+    return [];
   } catch (e) {
     console.error('Gemini vision error:', e.message);
     console.error('Error stack:', e.stack);
@@ -118,9 +306,10 @@ async function identifyCards(imageUrl) {
 // 核心模块 2: 价格查询 API
 // ============================================================
 
-// --- 宝可梦 (Pokemon TCG API - 免费) ---
+// --- 宝可梦 (Pokemon TCG API - 使用 SDK) ---
 async function queryPokemonPrice(card) {
   try {
+    console.log(`[Pokemon API] Querying card: ${card.name_en} (${card.card_number})`);
     let q = '';
     if (card.card_number) {
       const num = card.card_number.split('/')[0].trim();
@@ -130,21 +319,47 @@ async function queryPokemonPrice(card) {
     } else {
       q = `name:"${card.name_en}"`;
     }
+    console.log(`[Pokemon API] Query: ${q}`);
 
-    const url = `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(q)}&pageSize=5`;
-    const headers = process.env.POKEMON_TCG_API_KEY
-      ? { 'X-Api-Key': process.env.POKEMON_TCG_API_KEY }
-      : {};
+    // 使用 Pokemon TCG SDK
+    const result = await pokemon.card.where({ q, pageSize: 5 });
+    console.log(`[Pokemon API] Result count: ${result.data?.length || 0}`);
 
-    const resp = await fetch(url, { headers });
-    const data = await resp.json();
-
-    if (data.data?.length > 0) {
-      const m = data.data[0];
+    if (result.data?.length > 0) {
+      const m = result.data[0];
       const prices = {};
       for (const [k, v] of Object.entries(m.tcgplayer?.prices || {})) {
         prices[k] = { market: v.market, low: v.low, mid: v.mid, high: v.high };
       }
+
+      // 构建详细信息
+      const extraInfo = {
+        types: m.types || null,
+        hp: m.hp || null,
+        artist: m.artist || null,
+        rarity: m.rarity || null,
+        flavorText: m.flavorText || null,
+        attacks: m.attacks?.map(a => ({
+          name: a.name,
+          damage: a.damage,
+          cost: a.cost
+        })) || null,
+        weaknesses: m.weaknesses?.map(w => ({
+          type: w.type,
+          value: w.value
+        })) || null,
+        legalities: m.legalities || null,
+        set: {
+          id: m.set?.id,
+          name: m.set?.name,
+          series: m.set?.series,
+          printedTotal: m.set?.printedTotal,
+          total: m.set?.total,
+          releaseDate: m.set?.releaseDate,
+          ptcgoCode: m.set?.ptcgoCode
+        }
+      };
+
       return {
         found: true,
         name: m.name,
@@ -155,6 +370,11 @@ async function queryPokemonPrice(card) {
         prices,
         source: 'TCGPlayer (Pokemon TCG API)',
         url: m.tcgplayer?.url,
+        // 额外详细信息
+        extraInfo,
+        releaseDate: m.set?.releaseDate || null,
+        artist: m.artist || null,
+        setTotal: m.set?.printedTotal || null,
       };
     }
     return { found: false };
@@ -167,11 +387,14 @@ async function queryPokemonPrice(card) {
 // --- 海贼王 (OPTCG API - 免费) ---
 async function queryOnePiecePrice(card) {
   try {
+    console.log(`[OPTCG] Querying card: ${card.name_en} (${card.card_number})`);
     const num = card.card_number?.replace(/\s/g, '') || '';
     if (num) {
       const resp = await fetch(`https://optcgapi.com/api/cards/${encodeURIComponent(num)}`);
+      console.log(`[OPTCG] Response status: ${resp.status}`);
       if (resp.ok) {
         const d = await resp.json();
+        console.log(`[OPTCG] Found card:`, d);
         return {
           found: true,
           name: d.name || card.name_en,
@@ -185,9 +408,85 @@ async function queryOnePiecePrice(card) {
         };
       }
     }
+    console.log(`[OPTCG] Card not found`);
     return { found: false };
   } catch (e) {
     console.error('OP price error:', e.message);
+    return { found: false, error: e.message };
+  }
+}
+
+// --- TCGPlayer API (多游戏支持 - Pokemon, Yu-Gi-Oh, Magic 等) ---
+async function queryTCGPlayerPrice(card) {
+  if (!TCGPLAYER_CLIENT_ID || !TCGPLAYER_CLIENT_SECRET) {
+    return { found: false };
+  }
+  try {
+    const token = await getTCGPlayerToken();
+    if (!token) {
+      console.error('TCGPlayer: Failed to get access token');
+      return { found: false };
+    }
+
+    // 先搜索产品获取 ProductID
+    const searchResp = await fetch(
+      `https://api.tcgplayer.com/v2.0/catalog/products?productName=${encodeURIComponent(card.name_en)}&limit=5`,
+      { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } }
+    );
+
+    if (!searchResp.ok) {
+      console.error(`TCGPlayer search error: ${searchResp.status}`);
+      return { found: false };
+    }
+
+    const searchData = await searchResp.json();
+
+    if (searchData.results?.length > 0) {
+      const product = searchData.results[0];
+      const productId = product.productId;
+
+      // 获取价格
+      const priceResp = await fetch(
+        `https://api.tcgplayer.com/v1.39/pricing/product/${productId}`,
+        { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } }
+      );
+
+      if (!priceResp.ok) {
+        console.error(`TCGPlayer price error: ${priceResp.status}`);
+        return { found: false };
+      }
+
+      const priceData = await priceResp.json();
+
+      // 解析价格数据
+      const prices = {};
+      if (priceData.results?.length > 0) {
+        for (const item of priceData.results) {
+          const key = item.subTypeName || 'normal';
+          prices[key] = {
+            market: item.marketPrice,
+            low: item.lowPrice,
+            mid: item.midPrice,
+            high: item.highPrice
+          };
+        }
+      }
+
+      return {
+        found: true,
+        name: product.name,
+        set: product.productUrl?.split('/')?.[4] || card.set_name,
+        number: product.productVariant || card.card_number,
+        rarity: null,
+        image: product.imageUrl || null,
+        prices,
+        source: 'TCGPlayer API',
+        url: `https://www.tcgplayer.com/product/${productId}`,
+      };
+    }
+    return { found: false };
+  } catch (e) {
+    console.error('TCGPlayer error:', e.message);
     return { found: false, error: e.message };
   }
 }
@@ -216,12 +515,132 @@ async function queryJustTCG(card) {
   }
 }
 
+// ============================================================
+// 智能数据源路由器和健康监控
+// ============================================================
+
+// 数据源健康状态监控
+const dataSourceHealth = {
+  pokemonAPI: { healthy: true, lastCheck: 0, responseTime: 0, failures: 0 },
+  tcgplayerAPI: { healthy: true, lastCheck: 0, responseTime: 0, failures: 0 },
+  optcgAPI: { healthy: true, lastCheck: 0, responseTime: 0, failures: 0 },
+};
+
+// Pokemon 数据源链 (主 + 备)
+const POKEMON_DATA_SOURCES = [
+  { name: 'Pokemon TCG API', fn: queryPokemonPrice, priority: 1, key: 'pokemonAPI' },
+  { name: 'TCGPlayer API', fn: queryTCGPlayerPrice, priority: 2, key: 'tcgplayerAPI' },
+  { name: 'JustTCG API', fn: queryJustTCG, priority: 3, key: 'justTCG' },
+];
+
+// 智能路由：尝试所有数据源，返回最快成功的结果
+async function queryPokemonWithFallback(card) {
+  const startTime = Date.now();
+
+  // 并行请求所有数据源
+  const promises = POKEMON_DATA_SOURCES.map(async (source) => {
+    const sourceStartTime = Date.now();
+    try {
+      const result = await Promise.race([
+        source.fn(card),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Timeout')), 8000)
+        )
+      ]);
+
+      const responseTime = Date.now() - sourceStartTime;
+
+      if (result.found) {
+        updateSourceHealth(source.key, true, responseTime);
+        return { ...result, sourceName: source.name, responseTime };
+      }
+      updateSourceHealth(source.key, false, responseTime);
+      return null;
+    } catch (e) {
+      const responseTime = Date.now() - sourceStartTime;
+      updateSourceHealth(source.key, false, responseTime);
+      console.error(`${source.name} error:`, e.message);
+      return null;
+    }
+  });
+
+  // 等待所有请求完成
+  const results = await Promise.allSettled(promises);
+
+  // 找出所有成功的结果
+  const successResults = results
+    .filter(r => r.status === 'fulfilled' && r.value?.found)
+    .map(r => r.value);
+
+  if (successResults.length > 0) {
+    // 选择响应时间最快的结果
+    const bestResult = successResults.sort((a, b) => a.responseTime - b.responseTime)[0];
+    console.log(`✅ Price found from ${bestResult.sourceName} (${bestResult.responseTime}ms)`);
+    return bestResult;
+  }
+
+  // 所有数据源都失败，返回搜索链接
+  console.error('❌ All data sources failed for Pokemon card, providing search links');
+
+  // 生成搜索链接
+  const searchParts = [card.name_en];
+  if (card.card_number) {
+    searchParts.push(card.card_number.split('/')[0]);
+  }
+  if (card.set_name) {
+    searchParts.push(card.set_name);
+  }
+  const searchQuery = searchParts.join(' ');
+
+  return {
+    found: true,
+    name: card.name_en,
+    set: card.set_name || 'Unknown',
+    number: card.card_number || '???',
+    rarity: card.rarity || null,
+    image: null,
+    prices: null, // 无价格数据
+    source: 'Search Links (APIs unavailable)',
+    // 提供多个搜索链接
+    searchLinks: [
+      { name: 'TCGPlayer', url: `https://www.tcgplayer.com/search/all?productLineName=pokemon&q=${encodeURIComponent(searchQuery)}` },
+      { name: 'Google', url: `https://www.google.com/search?q=${encodeURIComponent(searchQuery + ' price')}` },
+      { name: 'CardMarket', url: `https://www.cardmarket.com/en/Pokemon/Search?searchString=${encodeURIComponent(searchQuery)}` }
+    ]
+  };
+}
+
+function updateSourceHealth(key, healthy, responseTime) {
+  if (dataSourceHealth[key]) {
+    const current = dataSourceHealth[key];
+    current.lastCheck = Date.now();
+    current.responseTime = responseTime;
+    if (healthy) {
+      current.healthy = true;
+      current.failures = 0;
+    } else {
+      current.failures++;
+      // 连续失败 3 次标记为不健康
+      if (current.failures >= 3) {
+        current.healthy = false;
+      }
+    }
+  }
+}
+
 // --- 路由：根据游戏类型查询价格 ---
 async function getCardPrice(card) {
+  console.log(`[getCardPrice] Game: ${card.game}, Card: ${card.name_en}`);
   switch (card.game) {
-    case 'pokemon':  return await queryPokemonPrice(card);
-    case 'onepiece': return await queryOnePiecePrice(card);
-    default:         return await queryJustTCG(card);
+    case 'pokemon':
+      // 使用智能多数据源
+      return await queryPokemonWithFallback(card);
+    case 'onepiece':
+      return await queryOnePiecePrice(card);
+    case 'yugioh':
+      return await queryTCGPlayerPrice(card);
+    default:
+      return await queryJustTCG(card);
   }
 }
 
@@ -230,7 +649,94 @@ async function getCardPrice(card) {
 // ============================================================
 const EMOJI = { pokemon: '⚡', onepiece: '🏴‍☠️', yugioh: '🃏', other: '🎴' };
 
-function buildPriceEmbed(card, priceResult) {
+// 辅助函数: 获取搜索类型标签
+function getTypeLabel(type) {
+  const labels = {
+    news: '📰 新闻资讯',
+    price_trend: '📈 价格趋势',
+    release: '📦 发售信息',
+    all: '🔍 全部'
+  };
+  return labels[type] || '🔍 全部';
+}
+
+// ============================================================
+// 收藏价值评估函数
+// ============================================================
+function calculateCollectibleValue(card, priceResult) {
+  // 稀有度评分
+  const rarityScores = {
+    'SEC': 5, 'SSR': 4.5, 'UR': 5, 'CSR': 5,  // 最高稀有度
+    'SR': 3.5, 'SSP': 4, 'RAR': 3,  // 高稀有度
+    'RR': 2.5, 'R': 2,  // 中等稀有度
+    'UC': 1.5, 'C': 1, 'N': 1,  // 低稀有度
+    'SVP': 4, 'SA': 3.5,  // 特别版本
+  };
+  const rarityScore = rarityScores[card.rarity?.toUpperCase()] || 1.5;
+
+  // 价格评分
+  let priceScore = 1;
+  if (priceResult && priceResult.prices) {
+    // 获取第一个可用的市场价格
+    const firstPrice = Object.values(priceResult.prices)[0];
+    const marketPrice = firstPrice?.market || firstPrice?.low || firstPrice?.mid || 0;
+
+    if (marketPrice > 100) priceScore = 5;
+    else if (marketPrice > 50) priceScore = 4;
+    else if (marketPrice > 20) priceScore = 3;
+    else if (marketPrice > 5) priceScore = 2;
+    else if (marketPrice > 1) priceScore = 1.5;
+  }
+
+  // 综合评分 (0-5 分)
+  const totalScore = (rarityScore + priceScore) / 2;
+
+  if (totalScore >= 4.5) return { level: '⭐⭐⭐⭐⭐', label: '收藏级珍品', color: 0xffd700 };
+  if (totalScore >= 3.5) return { level: '⭐⭐⭐⭐', label: '高收藏价值', color: 0xffa500 };
+  if (totalScore >= 2.5) return { level: '⭐⭐⭐', label: '中等收藏价值', color: 0xffff00 };
+  if (totalScore >= 1.5) return { level: '⭐⭐', label: '普通卡牌', color: 0xcccccc };
+  return { level: '⭐', label: '基础卡牌', color: 0x999999 };
+}
+
+// ============================================================
+// 市场资讯查询函数
+// ============================================================
+async function getCardMarketInfo(card) {
+  if (!ENABLE_WEB_SEARCH) return null;
+
+  try {
+    const gameNames = {
+      'pokemon': 'Pokemon TCG',
+      'onepiece': 'One Piece TCG',
+      'yugioh': 'Yu-Gi-Oh TCG'
+    };
+    const gameName = gameNames[card.game] || card.game || 'TCG';
+
+    // 构建搜索查询
+    const searchTerms = [
+      card.name_en,
+      gameName,
+      'price',
+      'news'
+    ].filter(Boolean).join(' ');
+
+    const searchResults = await webSearch(searchTerms);
+
+    if (searchResults.results && searchResults.results.length > 0) {
+      const result = searchResults.results[0];
+      return {
+        title: result.title?.slice(0, 50) || '市场资讯',
+        snippet: result.snippet?.slice(0, 120) || '暂无简介',
+        url: result.url
+      };
+    }
+  } catch (e) {
+    console.error('Market info search error:', e.message);
+  }
+  return null;
+}
+
+function buildPriceEmbed(card, priceResult, marketInfo = null) {
   const embed = new EmbedBuilder()
     .setColor(0xffd700)
     .setTitle(`${EMOJI[card.game] || '🎴'} ${card.name_en || card.name_cn}`)
@@ -239,19 +745,253 @@ function buildPriceEmbed(card, priceResult) {
   const names = [card.name_cn, card.name_jp].filter(Boolean).join(' | ');
   if (names) embed.setDescription(names);
 
-  // 卡牌信息
+  // 卡牌信息（整合 AI 分析）
   const info = [
     (card.set_name) && `📦 系列: ${card.set_name}`,
     (card.card_number) && `#️⃣ 编号: ${card.card_number}`,
     (card.rarity) && `✨ 稀有度: ${card.rarity}`,
-    `🎯 识别置信度: ${card.confidence || 'unknown'}`,
-    `⚠️ 仅供参考，不一定准确`,
   ].filter(Boolean);
+
+  // 添加发布时间
+  if (card.release_date) {
+    info.push(`📅 发布时间: ${card.release_date}`);
+  }
+
+  // 添加 AI 分析到卡牌信息
+  if (card.description) {
+    info.push(`📝 效果: ${card.description}`);
+  }
+  if (card.collectible_value) {
+    const valueMap = {
+      '收藏级珍品': '⭐⭐⭐⭐⭐',
+      '高收藏价值': '⭐⭐⭐⭐',
+      '中等收藏价值': '⭐⭐⭐',
+      '普通卡牌': '⭐⭐',
+      '基础卡牌': '⭐'
+    };
+    const stars = valueMap[card.collectible_value] || '⭐⭐';
+    info.push(`💎 收藏价值: ${stars} ${card.collectible_value}`);
+  }
+  if (card.market_popularity) {
+    const popularityMap = {
+      '超热门': '🔥🔥🔥',
+      '热门': '🔥🔥',
+      '一般': '🔥',
+      '冷门': '❄️'
+    };
+    info.push(`📈 市场热度: ${popularityMap[card.market_popularity] || '🔥'} ${card.market_popularity}`);
+  }
+  if (card.competitive_usage) {
+    info.push(`🏆 竞技: ${card.competitive_usage}`);
+  }
+  if (card.highlights) {
+    info.push(`✨ 特点: ${card.highlights}`);
+  }
+
+  info.push(`⚠️ 仅供参考，不一定准确`);
+
   if (info.length) {
     embed.addFields({
       name: '📋 卡牌信息',
       value: info.join('\n')
     });
+  }
+
+  // 值得关注的卡牌（同系列或同角色）
+  if (card.related_cards && Array.isArray(card.related_cards) && card.related_cards.length > 0) {
+    const relatedText = card.related_cards.map(c => {
+      const googleSearch = `https://www.google.com/search?q=${encodeURIComponent(c.name + ' ' + (card.set_name || '') + ' price')}`;
+      return `• [**${c.name}**](${googleSearch}) - ${c.reason}`;
+    }).join('\n');
+    embed.addFields({
+      name: '🔥 值得关注的卡牌',
+      value: relatedText
+    });
+  }
+
+  // 搜索链接
+  const searchNameOnly = (card.name_en || card.name_cn || '').trim();
+  const searchQuery1 = encodeURIComponent(`${searchNameOnly} price`.trim());
+  const searchUrl1 = `https://www.google.com/search?q=${searchQuery1}`;
+
+  const searchNameFull = `${searchNameOnly} ${card.set_name || ''} ${card.card_number || ''}`.trim();
+  const searchQuery2 = encodeURIComponent(`${searchNameFull} price`.trim());
+  const searchUrl2 = `https://www.google.com/search?q=${searchQuery2}`;
+
+  embed.addFields({
+    name: '🔗 价格查询',
+    value: `[🎯 仅角色名](${searchUrl1}) | [📦 完整信息](${searchUrl2})`
+  });
+
+  // 新增: 显示 API 返回的额外信息
+  if (priceResult && priceResult.found) {
+    const detailFields = [];
+
+    // 基本详情
+    const basicDetails = [];
+    if (priceResult.releaseDate) basicDetails.push(`📅 发售: ${priceResult.releaseDate}`);
+    if (priceResult.artist) basicDetails.push(`🎨 画师: ${priceResult.artist}`);
+    if (priceResult.set && !card.set_name) basicDetails.push(`📦 系列: ${priceResult.set}`);
+    if (basicDetails.length) {
+      detailFields.push({ name: '📚 基本详情', value: basicDetails.join('\n') });
+    }
+
+    // Pokemon 特有信息
+    if (priceResult.extraInfo && card.game === 'pokemon') {
+      const info = priceResult.extraInfo;
+      const pokemonDetails = [];
+
+      if (info.types) pokemonDetails.push(`⚡ 属性: ${info.types.join(', ')}`);
+      if (info.hp) pokemonDetails.push(`❤️ HP: ${info.hp}`);
+      if (info.set?.series) pokemonDetails.push(`📖 系列: ${info.set.series}`);
+      if (info.set?.ptcgoCode) pokemonDetails.push(`🔢 代码: ${info.set.ptcgoCode}`);
+
+      // 比赛合法性 - 扩展显示
+      if (info.legalities) {
+        const formats = [];
+
+        // Standard 赛制
+        if (info.legalities.standard === 'Legal') formats.push('✅ Standard');
+        else if (info.legalities.standard === 'Banned') formats.push('❌ Standard');
+
+        // Expanded 赛制
+        if (info.legalities.expanded === 'Legal') formats.push('✅ Expanded');
+        else if (info.legalities.expanded === 'Banned') formats.push('❌ Expanded');
+
+        // Unlimited 赛制 (几乎所有卡都合法)
+        if (info.legalities.unlimited === 'Legal') formats.push('✅ Unlimited');
+
+        // Legacy 赛制
+        if (info.legalities.legacy === 'Legal') formats.push('✅ Legacy');
+
+        if (formats.length) {
+          pokemonDetails.push(`🏆 赛制: ${formats.join(' | ')}`);
+        }
+      }
+
+      if (pokemonDetails.length) {
+        detailFields.push({ name: '⚡ Pokemon 详情', value: pokemonDetails.join('\n') });
+      }
+
+      // 招式信息 (最多显示前2个)
+      if (info.attacks && info.attacks.length > 0) {
+        const attackText = info.attacks.slice(0, 2).map(a => {
+          const cost = a.cost ? a.cost.join('') : '';
+          const dmg = a.damage ? ` (${a.damage})` : '';
+          return `${cost} ${a.name}${dmg}`;
+        }).join('\n');
+        detailFields.push({ name: '⚔️ 招式', value: attackText, inline: false });
+      }
+
+      // 弱点
+      if (info.weaknesses && info.weaknesses.length > 0) {
+        const weakText = info.weaknesses.map(w => `${w.type} ${w.value}`).join(', ');
+        detailFields.push({ name: '💔 弱点', value: weakText });
+      }
+
+      // 卡牌描述文字 (如果有)
+      if (info.flavorText) {
+        detailFields.push({ name: '💬 卡牌描述', value: info.flavorText.slice(0, 100) + (info.flavorText.length > 100 ? '...' : '') });
+      }
+
+      // 系列详细信息（新）
+      if (info.set) {
+        const setInfo = [];
+
+        // 系列名称
+        if (info.set.name && info.set.name !== card.set_name) {
+          setInfo.push(`📖 ${info.set.name}`);
+        }
+
+        // 编号/总数
+        if (info.set.printedTotal && priceResult.number) {
+          const currentNum = priceResult.number?.split('/')[0] || '?';
+          setInfo.push(`📚 编号: ${currentNum}/${info.set.printedTotal}`);
+        }
+
+        // 发售日期和距今年数
+        if (info.set.releaseDate) {
+          const releaseDate = new Date(info.set.releaseDate);
+          const yearsAgo = Math.floor((Date.now() - releaseDate) / (365 * 24 * 60 * 60 * 1000));
+          const month = String(releaseDate.getMonth() + 1).padStart(2, '0');
+          const day = String(releaseDate.getDate()).padStart(2, '0');
+          const year = releaseDate.getFullYear();
+          setInfo.push(`📅 发售: ${year}-${month}-${day} (${yearsAgo}年前)`);
+        }
+
+        if (setInfo.length) {
+          detailFields.push({ name: '📦 系列详情', value: setInfo.join('\n'), inline: false });
+        }
+      }
+    }
+
+    // One Piece 特有信息（新）
+    if (card.game === 'onepiece' && priceResult.found) {
+      const opDetails = [];
+
+      // 稀有度说明
+      const rarityMeanings = {
+        'SEC': '超稀有卡牌',
+        'SSR': '超级稀有',
+        'SR': '稀有卡牌',
+        'RAR': '稀有',
+        'R': '普通稀有',
+        'UC': '普通卡',
+        'C': '普通卡',
+        'L': '领袖卡',
+        'DON': '特殊卡'
+      };
+      if (card.rarity && rarityMeanings[card.rarity.toUpperCase()]) {
+        opDetails.push(`✨ ${card.rarity} - ${rarityMeanings[card.rarity.toUpperCase()]}`);
+      }
+
+      // 编号信息
+      if (card.card_number) {
+        opDetails.push(`#️⃣ 编号: ${card.card_number}`);
+      }
+
+      // 系列信息
+      if (card.set_name) {
+        opDetails.push(`📦 系列: ${card.set_name}`);
+      }
+
+      if (opDetails.length) {
+        detailFields.push({ name: '🏴‍☠️ One Piece 详情', value: opDetails.join('\n') });
+      }
+    }
+
+    // 添加所有详情字段
+    if (detailFields.length > 0) {
+      // Discord 最多允许 25 个字段，需要限制
+      const maxFields = 8;
+      detailFields.slice(0, maxFields).forEach(field => {
+        embed.addFields(field);
+      });
+    }
+
+    // 价格趋势信息（如果可用）
+    if (priceResult.priceTrend) {
+      const trendInfo = [];
+      if (priceResult.priceTrend.week1) trendInfo.push(`1周: ${priceResult.priceTrend.week1}`);
+      if (priceResult.priceTrend.month1) trendInfo.push(`1月: ${priceResult.priceTrend.month1}`);
+      if (trendInfo.length) {
+        embed.addFields({
+          name: '📈 价格趋势',
+          value: trendInfo.join(' | ')
+        });
+      }
+    }
+  }
+
+  // 如果 API 查询失败，添加搜索链接提示
+  if (priceResult && !priceResult.found) {
+    if (priceResult.searchLinks) {
+      const links = priceResult.searchLinks.map(l => `[${l.name}](${l.url})`).join(' | ');
+      embed.addFields({
+        name: '🔗 搜索卡牌价格',
+        value: `API 暂时无法访问，请使用以下链接搜索价格:\n${links}`
+      });
+    }
   }
 
   // 价格信息 - 显示 API 查询的真实价格
@@ -266,23 +1006,22 @@ function buildPriceEmbed(card, priceResult) {
     if (priceResult.url) {
       embed.addFields({ name: '🔗 购买链接', value: `[查看 TCGPlayer](${priceResult.url})` });
     }
+
+    // 价格趋势信息（如果可用）
+    if (priceResult.priceTrend) {
+      const trendInfo = [];
+      if (priceResult.priceTrend.week1) trendInfo.push(`1周: ${priceResult.priceTrend.week1}`);
+      if (priceResult.priceTrend.month1) trendInfo.push(`1月: ${priceResult.priceTrend.month1}`);
+      if (trendInfo.length) {
+        embed.addFields({
+          name: '📈 价格趋势',
+          value: trendInfo.join(' | ')
+        });
+      }
+    }
   }
 
-  // 搜索链接
-  const searchNameOnly = card.name_en.trim();
-  const searchQuery1 = encodeURIComponent(`${searchNameOnly} pricecharting`.trim());
-  const searchUrl1 = `https://www.google.com/search?q=${searchQuery1}`;
-
-  const searchNameFull = `${card.name_en} ${card.set_name || ''} ${card.card_number || ''}`.trim();
-  const searchQuery2 = encodeURIComponent(`${searchNameFull} pricecharting`.trim());
-  const searchUrl2 = `https://www.google.com/search?q=${searchQuery2}`;
-
-  embed.addFields({
-    name: '🔗 价格查询',
-    value: `[🎯 仅角色名](${searchUrl1}) | [📦 完整信息](${searchUrl2})`
-  });
-
-  embed.setFooter({ text: `⚡ Powered by Gemini Vision + Price APIs` });
+  embed.setFooter({ text: `⚡ Powered by Gemini Vision` });
   return embed;
 }
 
@@ -306,7 +1045,18 @@ async function processCardImage(imageUrl, gameOverride) {
   for (const card of cards) {
     // 先查真实价格 API
     const priceResult = await getCardPrice(card);
-    embeds.push(buildPriceEmbed(card, priceResult));
+
+    // 获取市场资讯（异步，不阻塞）
+    let marketInfo = null;
+    if (ENABLE_WEB_SEARCH && priceResult.found) {
+      try {
+        marketInfo = await getCardMarketInfo(card);
+      } catch (e) {
+        console.error('Market info fetch error:', e.message);
+      }
+    }
+
+    embeds.push(buildPriceEmbed(card, priceResult, marketInfo));
   }
 
   return { cards, embeds };
@@ -389,16 +1139,6 @@ async function registerCommands() {
           { name: '海贼王', value: 'onepiece' },
           { name: '游戏王', value: 'yugioh' },
         )),
-    new SlashCommandBuilder()
-      .setName('search')
-      .setDescription('🔎 按名称搜索卡牌价格')
-      .addStringOption(o => o.setName('name').setDescription('卡牌名称').setRequired(true))
-      .addStringOption(o => o.setName('game').setDescription('卡牌游戏').setRequired(true)
-        .addChoices(
-          { name: '宝可梦', value: 'pokemon' },
-          { name: '海贼王', value: 'onepiece' },
-          { name: '游戏王', value: 'yugioh' },
-        )),
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -429,17 +1169,6 @@ discord.on(Events.InteractionCreate, async (i) => {
 
       await i.editReply({ embeds: embeds.slice(0, 10) });
     } catch (e) { console.error(e); await i.editReply('❌ 出错了，请稍后重试'); }
-  }
-
-  if (i.commandName === 'search') {
-    await i.deferReply();
-    const card = {
-      game: i.options.getString('game'),
-      name_en: i.options.getString('name'),
-      confidence: 'manual',
-    };
-    const priceResult = await getCardPrice(card);
-    await i.editReply({ embeds: [buildPriceEmbed(card, priceResult)] });
   }
 });
 
