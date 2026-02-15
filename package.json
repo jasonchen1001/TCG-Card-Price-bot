@@ -1,0 +1,20 @@
+{
+  "name": "tcg-card-price-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for TCG card price lookup with AI vision",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": ["discord", "bot", "tcg", "pokemon", "onepiece", "yugioh", "price"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "groq-sdk": "^0.8.0",
+    "node-fetch": "^3.3.2",
+    "dotenv": "^16.4.5"
+  }
+}
