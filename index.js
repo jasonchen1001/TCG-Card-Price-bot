@@ -14,12 +14,6 @@ dotenv.config();
 import { Client, GatewayIntentBits, Events, EmbedBuilder,
         REST, Routes, SlashCommandBuilder } from 'discord.js';
 import fetch from 'node-fetch';
-import pokemon from 'pokemontcgsdk';
-
-// 配置 Pokemon TCG SDK
-if (process.env.POKEMON_TCG_API_KEY) {
-  pokemon.configure({ apiKey: process.env.POKEMON_TCG_API_KEY });
-}
 
 // ============================================================
 // TCGPlayer API 配置
@@ -306,82 +300,10 @@ async function identifyCards(imageUrl) {
 // 核心模块 2: 价格查询 API
 // ============================================================
 
-// --- 宝可梦 (Pokemon TCG API - 使用 SDK) ---
+// --- 宝可梦 (Pokemon TCG API - 已移除，API 不可用) ---
 async function queryPokemonPrice(card) {
-  try {
-    console.log(`[Pokemon API] Querying card: ${card.name_en} (${card.card_number})`);
-    let q = '';
-    if (card.card_number) {
-      const num = card.card_number.split('/')[0].trim();
-      q = card.set_name
-        ? `number:${num} set.name:"${card.set_name}"`
-        : `number:${num}`;
-    } else {
-      q = `name:"${card.name_en}"`;
-    }
-    console.log(`[Pokemon API] Query: ${q}`);
-
-    // 使用 Pokemon TCG SDK
-    const result = await pokemon.card.where({ q, pageSize: 5 });
-    console.log(`[Pokemon API] Result count: ${result.data?.length || 0}`);
-
-    if (result.data?.length > 0) {
-      const m = result.data[0];
-      const prices = {};
-      for (const [k, v] of Object.entries(m.tcgplayer?.prices || {})) {
-        prices[k] = { market: v.market, low: v.low, mid: v.mid, high: v.high };
-      }
-
-      // 构建详细信息
-      const extraInfo = {
-        types: m.types || null,
-        hp: m.hp || null,
-        artist: m.artist || null,
-        rarity: m.rarity || null,
-        flavorText: m.flavorText || null,
-        attacks: m.attacks?.map(a => ({
-          name: a.name,
-          damage: a.damage,
-          cost: a.cost
-        })) || null,
-        weaknesses: m.weaknesses?.map(w => ({
-          type: w.type,
-          value: w.value
-        })) || null,
-        legalities: m.legalities || null,
-        set: {
-          id: m.set?.id,
-          name: m.set?.name,
-          series: m.set?.series,
-          printedTotal: m.set?.printedTotal,
-          total: m.set?.total,
-          releaseDate: m.set?.releaseDate,
-          ptcgoCode: m.set?.ptcgoCode
-        }
-      };
-
-      return {
-        found: true,
-        name: m.name,
-        set: m.set?.name,
-        number: `${m.number}/${m.set?.printedTotal}`,
-        rarity: m.rarity,
-        image: m.images?.large || m.images?.small,
-        prices,
-        source: 'TCGPlayer (Pokemon TCG API)',
-        url: m.tcgplayer?.url,
-        // 额外详细信息
-        extraInfo,
-        releaseDate: m.set?.releaseDate || null,
-        artist: m.artist || null,
-        setTotal: m.set?.printedTotal || null,
-      };
-    }
-    return { found: false };
-  } catch (e) {
-    console.error('Pokemon price error:', e.message);
-    return { found: false, error: e.message };
-  }
+  console.log(`[Pokemon] API unavailable, skipping for ${card.name_en}`);
+  return { found: false };
 }
 
 // --- 海贼王 (OPTCG API - 免费) ---
