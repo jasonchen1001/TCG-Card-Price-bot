@@ -368,7 +368,7 @@ async function queryOnePiecePrice(card) {
   }
 }
 
-// OPTCG 搜索函数（通过编号）
+// OPTCG 搜索函数（通过编号）- 支持多版本
 async function searchOPTCGByNumber(cardNumber) {
   try {
     const num = cardNumber.replace(/\s/g, '');
@@ -381,26 +381,51 @@ async function searchOPTCGByNumber(cardNumber) {
     if (resp.ok) {
       const data = await resp.json();
       console.log(`[OPTCG Search] Response data type: ${Array.isArray(data) ? 'array' : typeof data}`);
-      // API 返回数组，取第一个元素
-      const card = Array.isArray(data) ? data[0] : data;
-      if (card) {
-        console.log(`[OPTCG Search] Found card: ${card.card_name}`);
+      // API 返回数组
+      const cards = Array.isArray(data) ? data : (data ? [data] : []);
+      if (cards.length > 0) {
+        console.log(`[OPTCG Search] Found ${cards.length} version(s)`);
+        // 如果只有一个版本，返回单张卡牌格式
+        if (cards.length === 1) {
+          const card = cards[0];
+          return {
+            found: true,
+            name: card.card_name,
+            set: card.set_name,
+            number: card.card_set_id,
+            rarity: card.rarity,
+            image: card.card_image,
+            prices: {
+              market: card.market_price,
+              low: card.inventory_price,
+            },
+            source: 'OPTCG API',
+            card_color: card.card_color,
+            card_type: card.card_type,
+            card_cost: card.card_cost,
+            card_power: card.card_power,
+          };
+        }
+        // 多个版本，返回多张卡牌格式
         return {
           found: true,
-          name: card.card_name,
-          set: card.set_name,
-          number: card.card_set_id,
-          rarity: card.rarity,
-          image: card.card_image,
-          prices: {
-            market: card.market_price,
-            low: card.inventory_price,
-          },
-          source: 'OPTCG API',
-          card_color: card.card_color,
-          card_type: card.card_type,
-          card_cost: card.card_cost,
-          card_power: card.card_power,
+          multiple: true,
+          cards: cards.map(card => ({
+            name: card.card_name,
+            number: card.card_set_id,
+            rarity: card.rarity,
+            image: card.card_image,
+            set: card.set_name,
+            prices: {
+              market: card.market_price,
+              low: card.inventory_price,
+            },
+            source: 'OPTCG API',
+            card_color: card.card_color,
+            card_type: card.card_type,
+            card_cost: card.card_cost,
+            card_power: card.card_power,
+          }))
         };
       }
     }
@@ -1197,25 +1222,86 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
 // 搜索结果 Embed 构建函数（简化版 - 只支持精确搜索）
 // ============================================================
 function buildSearchEmbed(searchResult, query, game) {
-  const embed = new EmbedBuilder()
-    .setColor(0x00bfff)
-    .setTitle(`🔍 搜索结果: ${query}`)
-    .setTimestamp();
-
   // 格式错误或未找到
   if (searchResult.formatError || !searchResult.found) {
-    embed.setDescription(searchResult.formatHint || '😅 未找到匹配的卡牌，请检查卡牌编号是否正确。');
+    const embed = new EmbedBuilder()
+      .setColor(0xff6b6b)
+      .setTitle(`🔍 搜索结果: ${query}`)
+      .setDescription(searchResult.formatHint || '😅 未找到匹配的卡牌，请检查卡牌编号是否正确。')
+      .setTimestamp();
     // 添加手动搜索链接
     const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(query + ' ' + game + ' card')}`;
     embed.addFields({
       name: '🔗 手动搜索',
       value: `[Google 搜索](${googleUrl})`
     });
-    return embed;
+    return [embed];
+  }
+
+  // 多版本结果（One Piece 同一编号的不同版本）- 为每个版本创建单独的 Embed
+  if (searchResult.multiple) {
+    const cards = searchResult.cards;
+    const embeds = [];
+
+    // 汇总 Embed
+    const summaryEmbed = new EmbedBuilder()
+      .setColor(0x00bfff)
+      .setTitle(`🔍 搜索结果: ${query}`)
+      .setDescription(`📋 找到 ${cards.length} 个版本，每个版本详情如下：`)
+      .setTimestamp()
+      .setFooter({ text: `⚡ 数据源: OPTCG API` });
+    embeds.push(summaryEmbed);
+
+    // 为每个版本创建单独的 Embed
+    cards.forEach((card, index) => {
+      const embed = new EmbedBuilder()
+        .setColor(0xffd700)
+        .setTitle(`版本 ${index + 1}: ${card.name}`)
+        .setTimestamp();
+
+      const info = [
+        (card.name) && `📛 名称: ${card.name}`,
+        (card.set) && `📦 系列: ${card.set}`,
+        (card.number) && `#️⃣ 编号: ${card.number}`,
+        (card.rarity) && `✨ 稀有度: ${card.rarity}`,
+      ].filter(Boolean);
+
+      // 额外信息
+      if (card.card_color) info.push(`🎨 颜色: ${card.card_color}`);
+      if (card.card_type) info.push(`🎴 类型: ${card.card_type}`);
+      if (card.card_cost) info.push(`💎 费用: ${card.card_cost}`);
+      if (card.card_power) info.push(`⚔️ 战斗力: ${card.card_power}`);
+
+      // 价格
+      if (card.prices && card.prices.market) {
+        info.push(`💰 市场价: $${card.prices.market.toFixed(2)} USD`);
+      }
+
+      if (info.length) {
+        embed.addFields({
+          name: '📋 卡牌信息',
+          value: info.join('\n')
+        });
+      }
+
+      // 显示图片
+      if (card.image) {
+        embed.setImage(card.image);
+      }
+
+      embeds.push(embed);
+    });
+
+    return embeds.slice(0, 10);
   }
 
   // 单张卡牌结果
   const card = searchResult;
+  const embed = new EmbedBuilder()
+    .setColor(0x00bfff)
+    .setTitle(`🔍 搜索结果: ${query}`)
+    .setTimestamp();
+
   const info = [
     (card.name) && `📛 名称: ${card.name}`,
     (card.set) && `📦 系列: ${card.set}`,
@@ -1223,7 +1309,7 @@ function buildSearchEmbed(searchResult, query, game) {
     (card.rarity) && `✨ 稀有度: ${card.rarity}`,
   ].filter(Boolean);
 
-  // 额外信息（颜色、类型、费用、战斗力）
+  // 额外信息
   if (card.card_color) info.push(`🎨 颜色: ${card.card_color}`);
   if (card.card_type) info.push(`🎴 类型: ${card.card_type}`);
   if (card.card_cost) info.push(`💎 费用: ${card.card_cost}`);
@@ -1251,7 +1337,7 @@ function buildSearchEmbed(searchResult, query, game) {
   }
 
   embed.setFooter({ text: `⚡ 数据源: ${card.source || 'OPTCG API'}` });
-  return embed;
+  return [embed];
 }
 
 // ============================================================
@@ -1422,9 +1508,9 @@ discord.on(Events.InteractionCreate, async (i) => {
         const searchResult = await searchCard(query, game);
 
         // 构建回复
-        const embed = buildSearchEmbed(searchResult, query, game);
+        const embeds = buildSearchEmbed(searchResult, query, game);
 
-        await i.editReply({ embeds: [embed] });
+        await i.editReply({ embeds: embeds.slice(0, 10) });
       } catch (e) {
         console.error('[Search] Error:', e);
         await i.editReply('❌ 搜索出错了，请稍后重试。');
