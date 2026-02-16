@@ -985,8 +985,8 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
     });
   }
 
-  // 值得关注的卡牌（同系列或同角色）- 跳过海贼王
-  if (card.game !== 'onepiece' && card.related_cards && Array.isArray(card.related_cards) && card.related_cards.length > 0) {
+  // 值得关注的卡牌（同系列或同角色）
+  if (card.related_cards && Array.isArray(card.related_cards) && card.related_cards.length > 0) {
     const relatedText = card.related_cards.map(c => {
       const googleSearch = `https://www.google.com/search?q=${encodeURIComponent(c.name + ' ' + (card.set_name || '') + ' price')}`;
       return `• [**${c.name}**](${googleSearch}) - ${c.reason}`;
