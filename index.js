@@ -1183,7 +1183,7 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
     }
   }
 
-  embed.setFooter({ text: `⚡ Powered by Gemini Vision` });
+  embed.setFooter({ text: `🧧 祝你开包大吉！ | ⚡ Powered by Gemini Vision` });
   return embed;
 }
 
@@ -1218,7 +1218,7 @@ function buildSearchEmbed(searchResult, query, game) {
       .setTitle(`🔍 搜索结果: ${query}`)
       .setDescription(`📋 找到 ${cards.length} 个版本，每个版本详情如下：`)
       .setTimestamp()
-      .setFooter({ text: `⚡ 数据源: OPTCG API` });
+      .setFooter({ text: `🧧 祝你开包大吉！ | ⚡ 数据源: OPTCG API` });
     embeds.push(summaryEmbed);
 
     // 为每个版本创建单独的 Embed
@@ -1305,7 +1305,7 @@ function buildSearchEmbed(searchResult, query, game) {
     embed.setImage(card.image);
   }
 
-  embed.setFooter({ text: `⚡ 数据源: ${card.source || 'OPTCG API'}` });
+  embed.setFooter({ text: `🧧 祝你开包大吉！ | ⚡ 数据源: ${card.source || 'OPTCG API'}` });
   return [embed];
 }
 
