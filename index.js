@@ -1378,19 +1378,44 @@ async function processCardImage(imageUrl, gameOverride) {
 }
 
 // ============================================================
-// Discord: 消息触发 (!price + 图片)
+// Discord: 消息触发 (!scan + 图片, !search + 编号)
 // ============================================================
 discord.on(Events.MessageCreate, async (msg) => {
   if (msg.author.bot) return;
 
-  const isCmd = msg.content.toLowerCase().startsWith('!price');
+  const isScan = msg.content.toLowerCase().startsWith('!scan');
+  const isSearch = msg.content.toLowerCase().startsWith('!search');
   const isAuto = msg.channel.name === 'card-pulls';
-  if (!isCmd && !isAuto) return;
+  if (!isScan && !isSearch && !isAuto) return;
 
+  // 处理 !search 命令
+  if (isSearch) {
+    // 提取卡牌编号
+    const args = msg.content.split(' ');
+    const cardNumber = args[1]?.trim();
+
+    if (!cardNumber) {
+      msg.reply('请输入卡牌编号！格式：`!search <编号>`\n例如：`!search OP01-001`');
+      return;
+    }
+
+    msg.reply(`🔍 正在搜索: ${cardNumber}...`).then(reply => {
+      searchCard(cardNumber, 'onepiece').then(searchResult => {
+        const embeds = buildSearchEmbed(searchResult, cardNumber, 'onepiece');
+        reply.edit({ embeds: embeds.slice(0, 10) }).catch(e => {
+          console.error('Error:', e);
+          reply.edit('❌ 搜索出错了，请稍后重试。');
+        });
+      });
+    });
+    return;
+  }
+
+  // 处理 !scan 命令和自动扫描
   // 确定要处理的图片URL
   let imageUrl = null;
 
-  // 情况1: 直接发送图片 + !price
+  // 情况1: 直接发送图片 + !scan
   const directImgs = msg.attachments.filter(a => a.contentType?.startsWith('image/'));
   if (directImgs.size > 0) {
     imageUrl = directImgs.first().url;
@@ -1410,7 +1435,7 @@ discord.on(Events.MessageCreate, async (msg) => {
   }
 
   if (!imageUrl) {
-    if (isCmd) msg.reply('请上传卡牌截图，或回复一张包含截图的消息！📸');
+    msg.reply('请上传卡牌截图，或回复一张包含截图的消息！📸');
     return;
   }
 
@@ -1445,8 +1470,8 @@ discord.on(Events.MessageCreate, async (msg) => {
 async function registerCommands() {
   const cmds = [
     new SlashCommandBuilder()
-      .setName('price')
-      .setDescription('📸 识别卡牌截图并查询价格')
+      .setName('scan')
+      .setDescription('📸 扫描卡牌图片并查询价格')
       .addAttachmentOption(o => o.setName('image').setDescription('卡牌截图').setRequired(true))
       .addStringOption(o => o.setName('game').setDescription('指定游戏 (可选)')
         .addChoices(
@@ -1475,7 +1500,7 @@ discord.on(Events.InteractionCreate, async (i) => {
   if (!i.isChatInputCommand()) return;
 
   try {
-    if (i.commandName === 'price') {
+    if (i.commandName === 'scan') {
       await i.deferReply();
       try {
         const att = i.options.getAttachment('image');
