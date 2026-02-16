@@ -985,8 +985,8 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
     });
   }
 
-  // 值得关注的卡牌（同系列或同角色）
-  if (card.related_cards && Array.isArray(card.related_cards) && card.related_cards.length > 0) {
+  // 值得关注的卡牌（同系列或同角色）- 跳过海贼王
+  if (card.game !== 'onepiece' && card.related_cards && Array.isArray(card.related_cards) && card.related_cards.length > 0) {
     const relatedText = card.related_cards.map(c => {
       const googleSearch = `https://www.google.com/search?q=${encodeURIComponent(c.name + ' ' + (card.set_name || '') + ' price')}`;
       return `• [**${c.name}**](${googleSearch}) - ${c.reason}`;
@@ -1113,40 +1113,9 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
       }
     }
 
-    // One Piece 特有信息（新）
-    if (card.game === 'onepiece' && priceResult.found) {
-      const opDetails = [];
-
-      // 稀有度说明
-      const rarityMeanings = {
-        'SEC': '超稀有卡牌',
-        'SSR': '超级稀有',
-        'SR': '稀有卡牌',
-        'RAR': '稀有',
-        'R': '普通稀有',
-        'UC': '普通卡',
-        'C': '普通卡',
-        'L': '领袖卡',
-        'DON': '特殊卡'
-      };
-      if (card.rarity && rarityMeanings[card.rarity.toUpperCase()]) {
-        opDetails.push(`✨ ${card.rarity} - ${rarityMeanings[card.rarity.toUpperCase()]}`);
-      }
-
-      // 编号信息
-      if (card.card_number) {
-        opDetails.push(`#️⃣ 编号: ${card.card_number}`);
-      }
-
-      // 系列信息
-      if (card.set_name) {
-        opDetails.push(`📦 系列: ${card.set_name}`);
-      }
-
-      if (opDetails.length) {
-        detailFields.push({ name: '🏴‍☠️ One Piece 详情', value: opDetails.join('\n') });
-      }
-    }
+    // One Piece 特有信息（不重复显示基本信息）
+    // 基本信息（系列、编号、稀有度）已在 "📋 卡牌信息" 字段中显示
+    // 这里只添加额外的 One Piece API 特有信息
 
     // 添加所有详情字段
     if (detailFields.length > 0) {
@@ -1182,8 +1151,8 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
     }
   }
 
-  // 价格信息 - 显示 API 查询的真实价格
-  if (priceResult && priceResult.found && priceResult.prices) {
+  // 价格信息 - 显示 API 查询的真实价格（海贼王不显示）
+  if (card.game !== 'onepiece' && priceResult && priceResult.found && priceResult.prices) {
     const p = priceResult.prices;
     const price = p.market || Object.values(p)[0]?.market || p.low || p.mid || p.high;
     const priceText = price ? `$${price.toFixed(2)} USD` : '暂无价格数据';
