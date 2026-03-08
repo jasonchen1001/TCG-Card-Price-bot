@@ -229,6 +229,11 @@ function createTranslationButtons() {
   const buttons = new ActionRowBuilder()
     .addComponents(
       new ButtonBuilder()
+        .setCustomId('translate_zh-CN')
+        .setLabel('简体中文')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('🇨🇳'),
+      new ButtonBuilder()
         .setCustomId('translate_zh-TW')
         .setLabel('繁體中文')
         .setStyle(ButtonStyle.Secondary)
@@ -547,7 +552,7 @@ ${JSON.stringify(textFields)}
 
 Output (same structure, all text in ${langName}):`;
 
-  try {
+  const doTranslate = async () => {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
@@ -564,7 +569,7 @@ Output (same structure, all text in ${langName}):`;
       }
     );
     const data = await response.json();
-    if (data.error?.code === 429) return cardData;
+    if (data.error?.code === 429) throw new Error('Quota exceeded');
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
     const clean = text.replace(/```json\n?|```\n?/g, '').trim();
     const translated = JSON.parse(clean);
@@ -577,9 +582,18 @@ Output (same structure, all text in ${langName}):`;
       highlights: translated.highlights ?? cardData.highlights,
       related_cards: Array.isArray(translated.related_cards) ? translated.related_cards : cardData.related_cards
     };
+  };
+
+  try {
+    return await doTranslate();
   } catch (e) {
-    console.error('Gemini translate error:', e.message);
-    return cardData;
+    console.error('Gemini translate error (retrying):', e.message);
+    try {
+      return await doTranslate();
+    } catch (e2) {
+      console.error('Gemini translate retry failed:', e2.message);
+      return cardData;
+    }
   }
 }
 
@@ -1788,13 +1802,10 @@ discord.on(Events.InteractionCreate, async (i) => {
       if (language !== 'zh-CN') {
         const langLabel = language === 'zh-TW' ? '繁體中文' : language === 'en-US' ? 'English' : '한국어';
         await i.editReply({ content: `🔄 Translating to ${langLabel}…`, embeds: [], components: [] }).catch(() => {});
-        try {
-          cardsToShow = await Promise.all(
-            cardDataArray.map(card => translateCardContentWithGemini(card, language))
-          );
-        } catch (e) {
-          console.error('Batch translate error:', e);
-        }
+        const results = await Promise.allSettled(
+          cardDataArray.map(card => translateCardContentWithGemini(card, language))
+        );
+        cardsToShow = results.map((r, idx) => (r.status === 'fulfilled' ? r.value : cardDataArray[idx]));
       }
 
       const translatedEmbeds = cardsToShow.map(cardData =>
