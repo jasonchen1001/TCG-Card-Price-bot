@@ -100,6 +100,14 @@ function cacheCardDataForMessage(messageId, embedBuilders) {
   messageCardDataCache.set(String(messageId), cardDataArray);
 }
 
+function cacheSearchDataForMessage(messageId, searchResult, query, game) {
+  if (messageCardDataCache.size >= CARD_DATA_CACHE_MAX) {
+    const firstKey = messageCardDataCache.keys().next().value;
+    messageCardDataCache.delete(firstKey);
+  }
+  messageCardDataCache.set(String(messageId), { type: 'search', searchResult, query, game });
+}
+
 async function webSearch(query) {
   if (!ENABLE_WEB_SEARCH) return null;
 
@@ -290,7 +298,18 @@ const TRANSLATIONS = {
     set_name: '📦 系列',
     legal: '✅',
     banned: '❌',
-    card_info: '📋 卡牌信息'
+    card_info: '📋 卡牌信息',
+    name_label: '📛 名称',
+    color: '🎨 颜色',
+    card_type: '🎴 类型',
+    cost: '💎 费用',
+    power: '⚔️ 战斗力',
+    market_price: '💰 市场价',
+    manual_search: '🔗 手动搜索',
+    search_result_title: '🔍 搜索结果',
+    found_versions: '找到 {n} 个版本',
+    version: '版本',
+    data_source: '数据源'
   },
   'zh-TW': {
     title_suffix: '（繁體中文）',
@@ -325,7 +344,18 @@ const TRANSLATIONS = {
     set_name: '📦 系列',
     legal: '✅',
     banned: '❌',
-    card_info: '📋 卡牌資訊'
+    card_info: '📋 卡牌資訊',
+    name_label: '📛 名稱',
+    color: '🎨 顏色',
+    card_type: '🎴 類型',
+    cost: '💎 費用',
+    power: '⚔️ 戰鬥力',
+    market_price: '💰 市場價',
+    manual_search: '🔗 手動搜尋',
+    search_result_title: '🔍 搜尋結果',
+    found_versions: '找到 {n} 個版本',
+    version: '版本',
+    data_source: '數據源'
   },
   'en-US': {
     title_suffix: '（English）',
@@ -360,7 +390,18 @@ const TRANSLATIONS = {
     set_name: '📦 Set',
     legal: '✅',
     banned: '❌',
-    card_info: '📋 Card Info'
+    card_info: '📋 Card Info',
+    name_label: '📛 Name',
+    color: '🎨 Color',
+    card_type: '🎴 Type',
+    cost: '💎 Cost',
+    power: '⚔️ Power',
+    market_price: '💰 Market',
+    manual_search: '🔗 Manual Search',
+    search_result_title: '🔍 Search Result',
+    found_versions: 'Found {n} version(s)',
+    version: 'Version',
+    data_source: 'Data source'
   },
   'ko-KR': {
     title_suffix: '（한국어）',
@@ -395,7 +436,18 @@ const TRANSLATIONS = {
     set_name: '📦 세트',
     legal: '✅',
     banned: '❌',
-    card_info: '📋 카드 정보'
+    card_info: '📋 카드 정보',
+    name_label: '📛 이름',
+    color: '🎨 색상',
+    card_type: '🎴 유형',
+    cost: '💎 코스트',
+    power: '⚔️ 파워',
+    market_price: '💰 시세',
+    manual_search: '🔗 수동 검색',
+    search_result_title: '🔍 검색 결과',
+    found_versions: '{n}개 버전',
+    version: '버전',
+    data_source: '데이터 소스'
   }
 };
 
@@ -603,8 +655,126 @@ Output (same structure, all text in ${langName}):`;
 
 // --- 宝可梦 (Pokemon TCG API - 已移除，API 不可用) ---
 async function queryPokemonPrice(card) {
-  console.log(`[Pokemon] API unavailable, skipping for ${card.name_en}`);
-  return { found: false };
+  try {
+    const apiKey = process.env.POKEMON_TCG_API_KEY;
+    if (!apiKey) {
+      console.log('[PokemonTCG] No API key, skipping');
+      return { found: false };
+    }
+
+    // 解析卡牌名称与编号（"173/165" → "173"）
+    const name = card.name_en?.trim();
+    const rawNumber = card.card_number?.trim() || '';
+    const number = rawNumber.split('/')[0].trim(); // 只取斜杠前的数字
+
+    if (!name) {
+      console.log('[PokemonTCG] No card name, skipping');
+      return { found: false };
+    }
+
+    // 构建查询字符串：有编号就精确查，没有就只用名字
+    // 正确格式：name:"Charizard V" → name:%22Charizard%20V%22，冒号不编码
+    const qParts = [`name:${encodeURIComponent(`"${name}"`)}`];
+    if (number) qParts.push(`number:${number}`);
+    const q = qParts.join('+');
+
+    console.log(`[PokemonTCG] Querying: ${q}`);
+    const url = `https://api.pokemontcg.io/v2/cards?q=${q}&pageSize=5`;
+    const resp = await fetch(url, {
+      headers: { 'X-Api-Key': apiKey }
+    });
+
+    if (!resp.ok) {
+      console.error(`[PokemonTCG] HTTP ${resp.status}`);
+      return { found: false };
+    }
+
+    const data = await resp.json();
+    const results = data.data;
+
+    if (!results || results.length === 0) {
+      console.log(`[PokemonTCG] No results for: ${q}`);
+      return { found: false };
+    }
+
+    // 优先选编号完全匹配的，否则用第一条
+    const matched = number
+      ? (results.find(c => c.number === number) || results[0])
+      : results[0];
+
+    console.log(`[PokemonTCG] Found: ${matched.name} ${matched.number} (${matched.set?.name})`);
+
+    // 提取 TCGPlayer 价格（按优先级遍历价格类型）
+    const tcg = matched.tcgplayer;
+    let prices = null;
+    let tcgUrl = tcg?.url || null;
+    if (tcg?.prices) {
+      const priceTypes = ['holofoil', 'normal', 'reverseHolofoil', '1stEditionHolofoil', 'unlimited'];
+      for (const type of priceTypes) {
+        const p = tcg.prices[type];
+        if (p && (p.market || p.low)) {
+          prices = {
+            market: p.market ?? null,
+            low: p.low ?? null,
+            high: p.high ?? null,
+            mid: p.mid ?? null,
+            type,
+          };
+          break;
+        }
+      }
+    }
+    // 若 TCGPlayer 无价格，用 CardMarket 均价作为备用
+    if (!prices && matched.cardmarket?.prices) {
+      const cm = matched.cardmarket.prices;
+      prices = {
+        market: cm.averageSellPrice ?? cm.trendPrice ?? null,
+        low: cm.lowPrice ?? null,
+        high: null,
+        mid: cm.avg7 ?? null,
+        type: 'cardmarket',
+      };
+      tcgUrl = matched.cardmarket.url || null;
+    }
+
+    // 提取额外 Pokemon 信息（用于 embed 展示）
+    const extraInfo = {
+      types: matched.types || null,
+      hp: matched.hp || null,
+      attacks: matched.attacks || null,
+      weaknesses: matched.weaknesses || null,
+      flavorText: matched.flavorText || null,
+      artist: matched.artist || null,
+      legalities: matched.legalities || null,
+      set: matched.set
+        ? {
+            name: matched.set.name,
+            series: matched.set.series,
+            ptcgoCode: matched.set.ptcgoCode,
+            releaseDate: matched.set.releaseDate,
+            printedTotal: matched.set.printedTotal,
+          }
+        : null,
+    };
+
+    return {
+      found: true,
+      name: matched.name,
+      set: matched.set?.name || card.set_name,
+      number: matched.number,
+      rarity: matched.rarity || card.rarity,
+      image: matched.images?.large || matched.images?.small || null,
+      prices,
+      url: tcgUrl,
+      releaseDate: matched.set?.releaseDate || null,
+      artist: matched.artist || null,
+      source: 'PokemonTCG API',
+      extraInfo,
+    };
+  } catch (e) {
+    console.error('[PokemonTCG] Error:', e.message);
+    return { found: false };
+  }
 }
 
 // --- 海贼王 (OPTCG API - 免费) ---
@@ -989,11 +1159,10 @@ const dataSourceHealth = {
   optcgAPI: { healthy: true, lastCheck: 0, responseTime: 0, failures: 0 },
 };
 
-// Pokemon 数据源链 (主 + 备)
+// Pokemon 数据源链（TCGPlayer 无可用 key，已移除）
 const POKEMON_DATA_SOURCES = [
   { name: 'Pokemon TCG API', fn: queryPokemonPrice, priority: 1, key: 'pokemonAPI' },
-  { name: 'TCGPlayer API', fn: queryTCGPlayerPrice, priority: 2, key: 'tcgplayerAPI' },
-  { name: 'JustTCG API', fn: queryJustTCG, priority: 3, key: 'justTCG' },
+  { name: 'JustTCG API', fn: queryJustTCG, priority: 2, key: 'justTCG' },
 ];
 
 // 智能路由：尝试所有数据源，返回最快成功的结果
@@ -1007,7 +1176,7 @@ async function queryPokemonWithFallback(card) {
       const result = await Promise.race([
         source.fn(card),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Timeout')), 8000)
+          setTimeout(() => reject(new Error('Timeout')), 12000)
         )
       ]);
 
@@ -1487,79 +1656,62 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
 }
 
 // ============================================================
-// 搜索结果 Embed 构建函数（简化版 - 只支持精确搜索）
+// 搜索结果 Embed 构建函数（支持多语言）
 // ============================================================
-function buildSearchEmbed(searchResult, query, game) {
+function buildSearchEmbed(searchResult, query, game, language = 'zh-CN') {
+  const t = TRANSLATIONS[language] || TRANSLATIONS['zh-CN'];
+
   // 格式错误或未找到
   if (searchResult.formatError || !searchResult.found) {
     const embed = new EmbedBuilder()
       .setColor(0xff6b6b)
-      .setTitle(`🔍 搜索结果: ${query}`)
+      .setTitle(`${t.search_result_title}: ${query}`)
       .setDescription(searchResult.formatHint || '😅 未找到匹配的卡牌，请检查卡牌编号是否正确。')
       .setTimestamp();
-    // 添加手动搜索链接
     const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(query + ' ' + game + ' card')}`;
     embed.addFields({
-      name: '🔗 手动搜索',
-      value: `[Google 搜索](${googleUrl})`
+      name: t.manual_search,
+      value: `[Google](${googleUrl})`
     });
     return [embed];
   }
 
-  // 多版本结果（One Piece 同一编号的不同版本）- 为每个版本创建单独的 Embed
+  // 多版本结果（One Piece 同一编号的不同版本）
   if (searchResult.multiple) {
     const cards = searchResult.cards;
     const embeds = [];
-
-    // 汇总 Embed
     const summaryEmbed = new EmbedBuilder()
       .setColor(0x00bfff)
-      .setTitle(`🔍 搜索结果: ${query}`)
-      .setDescription(`📋 找到 ${cards.length} 个版本，每个版本详情如下：`)
+      .setTitle(`${t.search_result_title}: ${query}`)
+      .setDescription(`📋 ${t.found_versions.replace('{n}', cards.length)}`)
       .setTimestamp()
-      .setFooter({ text: `🧧 祝你开包大吉！ | ⚡ 数据源: OPTCG API` });
+      .setFooter({ text: `🧧 祝你开包大吉！ | ⚡ ${t.data_source}: OPTCG API` });
     embeds.push(summaryEmbed);
 
-    // 为每个版本创建单独的 Embed
     cards.forEach((card, index) => {
       const embed = new EmbedBuilder()
         .setColor(0xffd700)
-        .setTitle(`版本 ${index + 1}: ${card.name}`)
+        .setTitle(`${t.version} ${index + 1}: ${card.name}`)
         .setTimestamp();
-
       const info = [
-        (card.name) && `📛 名称: ${card.name}`,
-        (card.set) && `📦 系列: ${card.set}`,
-        (card.number) && `#️⃣ 编号: ${card.number}`,
-        (card.rarity) && `✨ 稀有度: ${card.rarity}`,
+        (card.name) && `${t.name_label}: ${card.name}`,
+        (card.set) && `${t.series}: ${card.set}`,
+        (card.number) && `${t.number}: ${card.number}`,
+        (card.rarity) && `${t.rarity}: ${card.rarity}`,
       ].filter(Boolean);
-
-      // 额外信息
-      if (card.card_color) info.push(`🎨 颜色: ${card.card_color}`);
-      if (card.card_type) info.push(`🎴 类型: ${card.card_type}`);
-      if (card.card_cost) info.push(`💎 费用: ${card.card_cost}`);
-      if (card.card_power) info.push(`⚔️ 战斗力: ${card.card_power}`);
-
-      // 价格
+      if (card.card_color) info.push(`${t.color}: ${card.card_color}`);
+      if (card.card_type) info.push(`${t.card_type}: ${card.card_type}`);
+      if (card.card_cost) info.push(`${t.cost}: ${card.card_cost}`);
+      if (card.card_power) info.push(`${t.power}: ${card.card_power}`);
       if (card.prices && card.prices.market) {
-        info.push(`💰 市场价: $${card.prices.market.toFixed(2)} USD`);
+        info.push(`${t.market_price}: $${card.prices.market.toFixed(2)} USD`);
       }
-
       if (info.length) {
-        embed.addFields({
-          name: '📋 卡牌信息',
-          value: info.join('\n')
-        });
+        embed.addFields({ name: t.card_info || '📋 卡牌信息', value: info.join('\n') });
       }
-
-      // 显示图片
-      if (card.image) {
-        embed.setImage(card.image);
-      }
-
+      if (card.image) embed.setImage(card.image);
       embeds.push(embed);
     });
-
     return embeds.slice(0, 10);
   }
 
@@ -1567,44 +1719,28 @@ function buildSearchEmbed(searchResult, query, game) {
   const card = searchResult;
   const embed = new EmbedBuilder()
     .setColor(0x00bfff)
-    .setTitle(`🔍 搜索结果: ${query}`)
+    .setTitle(`${t.search_result_title}: ${query}`)
     .setTimestamp();
-
   const info = [
-    (card.name) && `📛 名称: ${card.name}`,
-    (card.set) && `📦 系列: ${card.set}`,
-    (card.number) && `#️⃣ 编号: ${card.number}`,
-    (card.rarity) && `✨ 稀有度: ${card.rarity}`,
+    (card.name) && `${t.name_label}: ${card.name}`,
+    (card.set) && `${t.series}: ${card.set}`,
+    (card.number) && `${t.number}: ${card.number}`,
+    (card.rarity) && `${t.rarity}: ${card.rarity}`,
   ].filter(Boolean);
-
-  // 额外信息
-  if (card.card_color) info.push(`🎨 颜色: ${card.card_color}`);
-  if (card.card_type) info.push(`🎴 类型: ${card.card_type}`);
-  if (card.card_cost) info.push(`💎 费用: ${card.card_cost}`);
-  if (card.card_power) info.push(`⚔️ 战斗力: ${card.card_power}`);
-
-  // Pokemon 特有信息
-  if (card.hp) info.push(`❤️ HP: ${card.hp}`);
-  if (card.types && Array.isArray(card.types)) info.push(`🏷️ 属性: ${card.types.join(', ')}`);
-
-  // 显示价格信息（如果有）
+  if (card.card_color) info.push(`${t.color}: ${card.card_color}`);
+  if (card.card_type) info.push(`${t.card_type}: ${card.card_type}`);
+  if (card.card_cost) info.push(`${t.cost}: ${card.card_cost}`);
+  if (card.card_power) info.push(`${t.power}: ${card.card_power}`);
+  if (card.hp) info.push(`${t.hp}: ${card.hp}`);
+  if (card.types && Array.isArray(card.types)) info.push(`${t.types}: ${card.types.join(', ')}`);
   if (card.prices && card.prices.market) {
-    info.push(`💰 市场价: $${card.prices.market.toFixed(2)} USD`);
+    info.push(`${t.market_price}: $${card.prices.market.toFixed(2)} USD`);
   }
-
   if (info.length) {
-    embed.addFields({
-      name: '📋 卡牌信息',
-      value: info.join('\n')
-    });
+    embed.addFields({ name: t.card_info || '📋 卡牌信息', value: info.join('\n') });
   }
-
-  // 显示图片（如果有）
-  if (card.image) {
-    embed.setImage(card.image);
-  }
-
-  embed.setFooter({ text: `🧧 祝你开包大吉！ | ⚡ 数据源: ${card.source || 'OPTCG API'}` });
+  if (card.image) embed.setImage(card.image);
+  embed.setFooter({ text: `🧧 祝你开包大吉！ | ⚡ ${t.data_source}: ${card.source || 'OPTCG API'}` });
   return [embed];
 }
 
@@ -1670,10 +1806,12 @@ discord.on(Events.MessageCreate, async (msg) => {
     msg.reply(`🔍 正在搜索: ${cardNumber}...`).then(reply => {
       searchCard(cardNumber, 'onepiece').then(searchResult => {
         const embeds = buildSearchEmbed(searchResult, cardNumber, 'onepiece');
-        reply.edit({ embeds: embeds.slice(0, 10) }).catch(e => {
-          console.error('Error:', e);
-          reply.edit('❌ 搜索出错了，请稍后重试。');
-        });
+        reply.edit({ embeds: embeds.slice(0, 10), components: [createTranslationButtons()] })
+          .then(editedMsg => { cacheSearchDataForMessage(editedMsg.id, searchResult, cardNumber, 'onepiece'); })
+          .catch(e => {
+            console.error('Error:', e);
+            reply.edit('❌ 搜索出错了，请稍后重试。');
+          });
       });
     });
     return;
@@ -1775,9 +1913,18 @@ discord.on(Events.InteractionCreate, async (i) => {
       await i.deferUpdate();
 
       const messageId = i.message?.id;
-      let cardDataArray = messageId ? messageCardDataCache.get(String(messageId)) : null;
+      const cached = messageId ? messageCardDataCache.get(String(messageId)) : null;
 
-      // 无缓存时尝试从 embed 解码（仅对未经过 Discord 的 embed 有效，通常无效）
+      // Search 结果：直接按语言重建 embed，无需 Gemini
+      if (cached && cached.type === 'search') {
+        const translatedEmbeds = buildSearchEmbed(cached.searchResult, cached.query, cached.game, language);
+        await i.editReply({ content: '', embeds: translatedEmbeds, components: [createTranslationButtons()] });
+        console.log(`✅ Search result translated to ${language}`);
+        return;
+      }
+
+      // Scan 结果：使用卡牌数据数组
+      let cardDataArray = Array.isArray(cached) ? cached : null;
       if (!cardDataArray?.length && i.message?.embeds?.length) {
         cardDataArray = [];
         for (const embed of i.message.embeds) {
@@ -1791,13 +1938,13 @@ discord.on(Events.InteractionCreate, async (i) => {
 
       if (!cardDataArray?.length) {
         await i.editReply({
-          content: '❌ 无法获取原始卡牌数据，请重新扫描后再使用翻译。',
+          content: '❌ 无法获取原始卡牌数据，请重新扫描/搜索后再使用翻译。',
           components: [createTranslationButtons()]
         });
         return;
       }
 
-      // 非简体中文时用 Gemini 翻译卡牌正文（描述、稀有度、相关卡原因等）
+      // 非简体中文时用 Gemini 翻译卡牌正文
       let cardsToShow = cardDataArray;
       if (language !== 'zh-CN') {
         const langLabel = language === 'zh-TW' ? '繁體中文' : language === 'en-US' ? 'English' : '한국어';
@@ -1870,10 +2017,13 @@ discord.on(Events.InteractionCreate, async (i) => {
         // 调用搜索
         const searchResult = await searchCard(query, game);
 
-        // 构建回复
+        // 构建回复并加翻译按钮
         const embeds = buildSearchEmbed(searchResult, query, game);
-
-        await i.editReply({ embeds: embeds.slice(0, 10) });
+        const sentMsg = await i.editReply({
+          embeds: embeds.slice(0, 10),
+          components: [createTranslationButtons()]
+        });
+        cacheSearchDataForMessage(sentMsg.id, searchResult, query, game);
       } catch (e) {
         console.error('[Search] Error:', e);
         await i.editReply('❌ 搜索出错了，请稍后重试。');
@@ -1903,7 +2053,9 @@ discord.on(Events.ClientReady, () => {
     console.error('❌ Button function error:', error);
   }
 });
+console.log('📡 正在注册 Slash 命令...');
 registerCommands();
+console.log('🔐 正在连接 Discord...');
 discord.login(process.env.DISCORD_TOKEN);
 
 // ============================================================
