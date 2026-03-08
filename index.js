@@ -1161,11 +1161,8 @@ const dataSourceHealth = {
   optcgAPI: { healthy: true, lastCheck: 0, responseTime: 0, failures: 0 },
 };
 
-// Pokemon 数据源链（TCGPlayer 无可用 key，已移除）
-const POKEMON_DATA_SOURCES = [
-  { name: 'Pokemon TCG API', fn: queryPokemonPrice, priority: 1, key: 'pokemonAPI' },
-  { name: 'JustTCG API', fn: queryJustTCG, priority: 2, key: 'justTCG' },
-];
+// Pokemon 数据源链（外部 API 从中国服务器不可访问，已禁用）
+const POKEMON_DATA_SOURCES = [];
 
 // 智能路由：尝试所有数据源，返回最快成功的结果
 async function queryPokemonWithFallback(card) {
