@@ -1847,7 +1847,7 @@ discord.on(Events.MessageCreate, async (msg) => {
     return;
   }
 
-  const reply = await msg.reply('🔍 正在识别卡牌并查询价格...');
+  const reply = await msg.reply('🔍 Identifying card...');
 
   try {
     const result = await processCardImage(imageUrl);
@@ -1865,7 +1865,7 @@ discord.on(Events.MessageCreate, async (msg) => {
       return;
     }
 
-    const editedMsg = await reply.edit({ content: '✅ 查询完成！', embeds: embeds.slice(0, 10), components: [createTranslationButtons()] });
+    const editedMsg = await reply.edit({ content: '✅ Done!', embeds: embeds.slice(0, 10), components: [createTranslationButtons()] });
     cacheCardDataForMessage(editedMsg.id, cards.slice(0, 10));
   } catch (e) {
     console.error('Error:', e);
