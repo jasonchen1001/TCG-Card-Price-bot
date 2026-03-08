@@ -83,16 +83,8 @@ const CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存
 const messageCardDataCache = new Map();
 const CARD_DATA_CACHE_MAX = 300;
 
-function cacheCardDataForMessage(messageId, embedBuilders) {
-  const cardDataArray = [];
-  for (const embed of embedBuilders) {
-    if (!embed?.data?.cardData) continue;
-    try {
-      const decoded = JSON.parse(Buffer.from(embed.data.cardData, 'base64').toString('utf-8'));
-      cardDataArray.push(decoded);
-    } catch (_) {}
-  }
-  if (cardDataArray.length === 0) return;
+function cacheCardDataForMessage(messageId, cardDataArray) {
+  if (!cardDataArray?.length) return;
   if (messageCardDataCache.size >= CARD_DATA_CACHE_MAX) {
     const firstKey = messageCardDataCache.keys().next().value;
     messageCardDataCache.delete(firstKey);
@@ -621,10 +613,19 @@ Output (same structure, all text in ${langName}):`;
       }
     );
     const data = await response.json();
-    if (data.error?.code === 429) throw new Error('Quota exceeded');
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    if (!response.ok || data.error) {
+      throw new Error(`Gemini API error ${response.status}: ${JSON.stringify(data.error || data)}`);
+    }
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      const reason = data.candidates?.[0]?.finishReason || 'no candidates';
+      throw new Error(`Empty Gemini response: ${reason}`);
+    }
     const clean = text.replace(/```json\n?|```\n?/g, '').trim();
     const translated = JSON.parse(clean);
+    // 验证至少有一个字段被翻译
+    const translatedCount = Object.keys(translated).filter(k => translated[k] != null).length;
+    if (translatedCount === 0) throw new Error('Gemini returned empty translation object');
     return {
       ...cardData,
       description: translated.description ?? cardData.description,
@@ -639,11 +640,12 @@ Output (same structure, all text in ${langName}):`;
   try {
     return await doTranslate();
   } catch (e) {
-    console.error('Gemini translate error (retrying):', e.message);
+    console.error(`[Translate] Error (will retry): ${e.message}`);
     try {
+      await new Promise(r => setTimeout(r, 1000));
       return await doTranslate();
     } catch (e2) {
-      console.error('Gemini translate retry failed:', e2.message);
+      console.error(`[Translate] Retry failed: ${e2.message}`);
       return cardData;
     }
   }
@@ -1765,6 +1767,9 @@ async function processCardImage(imageUrl, gameOverride) {
     // 先查真实价格 API
     const priceResult = await getCardPrice(card);
 
+    // 将 priceResult 附到 card 上，供后续翻译时重建 embed 使用
+    card.priceResult = priceResult;
+
     // 获取市场资讯（异步，不阻塞）
     let marketInfo = null;
     if (ENABLE_WEB_SEARCH && priceResult.found) {
@@ -1864,7 +1869,7 @@ discord.on(Events.MessageCreate, async (msg) => {
     }
 
     const editedMsg = await reply.edit({ content: '✅ 查询完成！', embeds: embeds.slice(0, 10), components: [createTranslationButtons()] });
-    cacheCardDataForMessage(editedMsg.id, embeds.slice(0, 10));
+    cacheCardDataForMessage(editedMsg.id, cards.slice(0, 10));
   } catch (e) {
     console.error('Error:', e);
     await reply.edit('❌ 处理出错了，请稍后重试。');
@@ -2000,7 +2005,7 @@ discord.on(Events.InteractionCreate, async (i) => {
           embeds: embeds.slice(0, 10),
           components: [createTranslationButtons()]
         });
-        cacheCardDataForMessage(sentMsg.id, embeds.slice(0, 10));
+        cacheCardDataForMessage(sentMsg.id, cards.slice(0, 10));
         console.log('✅ Reply sent with buttons');
       } catch (e) { console.error(e); await i.editReply('❌ 出错了，请稍后重试'); }
     }
