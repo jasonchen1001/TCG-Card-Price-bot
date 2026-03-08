@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
-    "test:bot": "NODE_ENV=test node -r dotenv/config index.js dotenv_config_path=.env.test"
+    "test:bot": "NODE_ENV=test node -r dotenv/config index.js dotenv_config_path=.env.test",
+    "test:bot:log": "NODE_ENV=test node -r dotenv/config index.js dotenv_config_path=.env.test 2>&1 | tee bot-test.log"
   },
   "keywords": [
     "discord",

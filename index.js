@@ -12,7 +12,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { Client, GatewayIntentBits, Events, EmbedBuilder,
-        REST, Routes, SlashCommandBuilder } from 'discord.js';
+        REST, Routes, SlashCommandBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } from 'discord.js';
 import fetch from 'node-fetch';
 
 // ============================================================
@@ -78,6 +78,27 @@ const ENABLE_WEB_SEARCH = process.env.ENABLE_WEB_SEARCH === 'true';
 // 网络搜索缓存（简单内存缓存）
 const searchCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存
+
+// 翻译用：按消息 ID 缓存卡牌数据（Discord 不保存 embed 自定义字段，必须本地缓存）
+const messageCardDataCache = new Map();
+const CARD_DATA_CACHE_MAX = 300;
+
+function cacheCardDataForMessage(messageId, embedBuilders) {
+  const cardDataArray = [];
+  for (const embed of embedBuilders) {
+    if (!embed?.data?.cardData) continue;
+    try {
+      const decoded = JSON.parse(Buffer.from(embed.data.cardData, 'base64').toString('utf-8'));
+      cardDataArray.push(decoded);
+    } catch (_) {}
+  }
+  if (cardDataArray.length === 0) return;
+  if (messageCardDataCache.size >= CARD_DATA_CACHE_MAX) {
+    const firstKey = messageCardDataCache.keys().next().value;
+    messageCardDataCache.delete(firstKey);
+  }
+  messageCardDataCache.set(String(messageId), cardDataArray);
+}
 
 async function webSearch(query) {
   if (!ENABLE_WEB_SEARCH) return null;
@@ -201,6 +222,179 @@ const discord = new Client({
 });
 
 // ============================================================
+// 多语言翻译按钮生成
+// ============================================================
+function createTranslationButtons() {
+  console.log('🔧 Creating translation buttons...');
+  const buttons = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder()
+        .setCustomId('translate_zh-TW')
+        .setLabel('繁體中文')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('🇹🇼'),
+      new ButtonBuilder()
+        .setCustomId('translate_en-US')
+        .setLabel('English')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('🇺🇸'),
+      new ButtonBuilder()
+        .setCustomId('translate_ko-KR')
+        .setLabel('한국어')
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji('🇰🇷')
+    );
+  console.log('✅ Translation buttons created successfully');
+  return buttons;
+}
+
+// ============================================================
+// 多语言翻译字典
+// ============================================================
+const TRANSLATIONS = {
+  'zh-CN': {
+    title_suffix: '',
+    series: '📦 系列',
+    number: '#️⃣ 编号',
+    rarity: '✨ 稀有度',
+    release: '📅 发布时间',
+    effect: '📝 效果',
+    collectible: '💎 收藏价值',
+    popularity: '📈 市场热度',
+    competitive: '🏆 竞技',
+    highlights: '✨ 特点',
+    warning: '⚠️ 仅供参考，不一定准确',
+    related: '🔥 值得关注的卡牌',
+    price_query: '🔗 价格查询',
+    name_only: '🎯 仅角色名',
+    full_info: '📦 完整信息',
+    basic_details: '📚 基本详情',
+    price_details: '💰 价格详情',
+    pokemon_details: '⚡ Pokemon 详情',
+    types: '⚡ 属性',
+    hp: '❤️ HP',
+    series_info: '📖 系列',
+    code: '🔢 代码',
+    formats: '🏆 赛制',
+    attacks: '⚔️ 招式',
+    weakness: '💔 弱点',
+    card_description: '💬 卡牌描述',
+    set_details: '📦 系列详情',
+    artist: '🎨 画师',
+    release_date: '📅 发售',
+    set_name: '📦 系列',
+    legal: '✅',
+    banned: '❌',
+    card_info: '📋 卡牌信息'
+  },
+  'zh-TW': {
+    title_suffix: '（繁體中文）',
+    series: '📦 系列',
+    number: '#️⃣ 編號',
+    rarity: '✨ 稀有度',
+    release: '📅 發布時間',
+    effect: '📝 效果',
+    collectible: '💎 收藏價值',
+    popularity: '📈 市場熱度',
+    competitive: '🏆 競技',
+    highlights: '✨ 特點',
+    warning: '⚠️ 僅供參考，不一定準確',
+    related: '🔥 值得關注的卡牌',
+    price_query: '🔗 價格查詢',
+    name_only: '🎯 僅角色名',
+    full_info: '📦 完整資訊',
+    basic_details: '📚 基本詳情',
+    price_details: '💰 價格詳情',
+    pokemon_details: '⚡ Pokemon 詳情',
+    types: '⚡ 屬性',
+    hp: '❤️ HP',
+    series_info: '📖 系列',
+    code: '🔢 代碼',
+    formats: '🏆 賽制',
+    attacks: '⚔️ 招式',
+    weakness: '💔 弱點',
+    card_description: '💬 卡牌描述',
+    set_details: '📦 系列詳情',
+    artist: '🎨 畫師',
+    release_date: '📅 發售',
+    set_name: '📦 系列',
+    legal: '✅',
+    banned: '❌',
+    card_info: '📋 卡牌資訊'
+  },
+  'en-US': {
+    title_suffix: '（English）',
+    series: '📦 Series',
+    number: '#️⃣ Number',
+    rarity: '✨ Rarity',
+    release: '📅 Release Date',
+    effect: '📝 Effect',
+    collectible: '💎 Collectible Value',
+    popularity: '📈 Market Popularity',
+    competitive: '🏆 Competitive',
+    highlights: '✨ Highlights',
+    warning: '⚠️ For reference only, may not be accurate',
+    related: '🔥 Notable Cards',
+    price_query: '🔗 Price Query',
+    name_only: '🎯 Name Only',
+    full_info: '📦 Full Info',
+    basic_details: '📚 Basic Details',
+    price_details: '💰 Price Details',
+    pokemon_details: '⚡ Pokemon Details',
+    types: '⚡ Types',
+    hp: '❤️ HP',
+    series_info: '📖 Series',
+    code: '🔢 Code',
+    formats: '🏆 Formats',
+    attacks: '⚔️ Attacks',
+    weakness: '💔 Weakness',
+    card_description: '💬 Card Description',
+    set_details: '📦 Set Details',
+    artist: '🎨 Artist',
+    release_date: '📅 Release',
+    set_name: '📦 Set',
+    legal: '✅',
+    banned: '❌',
+    card_info: '📋 Card Info'
+  },
+  'ko-KR': {
+    title_suffix: '（한국어）',
+    series: '📦 시리즈',
+    number: '#️⃣ 번호',
+    rarity: '✨ 레어도',
+    release: '📅 출시일',
+    effect: '📝 효과',
+    collectible: '💎 수집 가치',
+    popularity: '📈 시장 인기도',
+    competitive: '🏆 경쟁',
+    highlights: '✨ 특징',
+    warning: '⚠️ 참고용이며 정확하지 않을 수 있습니다',
+    related: '🔥 주목할 만한 카드',
+    price_query: '🔗 가격 조회',
+    name_only: '🎯 캐릭터명만',
+    full_info: '📦 전체 정보',
+    basic_details: '📚 기본 정보',
+    price_details: '💰 가격 상세',
+    pokemon_details: '⚡ Pokemon 상세',
+    types: '⚡ 속성',
+    hp: '❤️ HP',
+    series_info: '📖 시리즈',
+    code: '🔢 코드',
+    formats: '🏆 포맷',
+    attacks: '⚔️ 기술',
+    weakness: '💔 약점',
+    card_description: '💬 카드 설명',
+    set_details: '📦 세트 상세',
+    artist: '🎨 일러스트',
+    release_date: '📅 출시',
+    set_name: '📦 세트',
+    legal: '✅',
+    banned: '❌',
+    card_info: '📋 카드 정보'
+  }
+};
+
+// ============================================================
 // 核心模块 1: Gemini Vision 识别卡牌
 // ============================================================
 const CARD_IDENTIFY_PROMPT = `你是一个专业的 TCG 卡牌识别专家。请仔细查看图片中的卡牌。[PROMPT_V7: 包含卡牌效果描述（中文）、收藏价值、市场热度、竞技使用情况、发布时间、值得关注的卡牌等详细分析]
@@ -319,6 +513,73 @@ async function identifyCards(imageUrl) {
     console.error('Gemini vision error:', e.message);
     console.error('Error stack:', e.stack);
     return [];
+  }
+}
+
+// ============================================================
+// Gemini 卡牌内容翻译（描述/稀有度/相关卡原因 等中文 → 目标语言）
+// ============================================================
+const LANGUAGE_NAMES = { 'zh-TW': 'Traditional Chinese', 'en-US': 'English', 'ko-KR': 'Korean' };
+
+async function translateCardContentWithGemini(cardData, targetLang) {
+  if (targetLang === 'zh-CN') return cardData;
+  const langName = LANGUAGE_NAMES[targetLang] || 'English';
+  const textFields = {
+    description: cardData.description,
+    collectible_value: cardData.collectible_value,
+    market_popularity: cardData.market_popularity,
+    competitive_usage: cardData.competitive_usage,
+    highlights: cardData.highlights,
+    related_cards: cardData.related_cards
+  };
+  const hasAny = Object.values(textFields).some(v => v != null && (Array.isArray(v) ? v.length : String(v).trim()));
+  if (!hasAny) return cardData;
+
+  const prompt = `You are a translator for TCG card text. Translate the following from Chinese to ${langName}.
+Rules:
+- Return ONLY a valid JSON object with the same keys. No markdown, no explanation.
+- For related_cards: keep "name" unchanged; translate only "reason" to ${langName}.
+- Keep null/empty values as null.
+- Use natural, fluent ${langName} for card descriptions and labels.
+
+Input (Chinese):
+${JSON.stringify(textFields)}
+
+Output (same structure, all text in ${langName}):`;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 2048,
+            responseMimeType: 'application/json'
+          }
+        })
+      }
+    );
+    const data = await response.json();
+    if (data.error?.code === 429) return cardData;
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    const clean = text.replace(/```json\n?|```\n?/g, '').trim();
+    const translated = JSON.parse(clean);
+    return {
+      ...cardData,
+      description: translated.description ?? cardData.description,
+      collectible_value: translated.collectible_value ?? cardData.collectible_value,
+      market_popularity: translated.market_popularity ?? cardData.market_popularity,
+      competitive_usage: translated.competitive_usage ?? cardData.competitive_usage,
+      highlights: translated.highlights ?? cardData.highlights,
+      related_cards: Array.isArray(translated.related_cards) ? translated.related_cards : cardData.related_cards
+    };
+  } catch (e) {
+    console.error('Gemini translate error:', e.message);
+    return cardData;
   }
 }
 
@@ -924,10 +1185,12 @@ async function getCardMarketInfo(card) {
   return null;
 }
 
-function buildPriceEmbed(card, priceResult, marketInfo = null) {
+function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN') {
+  const t = TRANSLATIONS[language] || TRANSLATIONS['zh-CN'];
+
   const embed = new EmbedBuilder()
     .setColor(0xffd700)
-    .setTitle(`${EMOJI[card.game] || '🎴'} ${card.name_en || card.name_cn}`)
+    .setTitle(`${EMOJI[card.game] || '🎴'} ${card.name_en || card.name_cn}${t.title_suffix}`)
     .setTimestamp();
 
   const names = [card.name_cn, card.name_jp].filter(Boolean).join(' | ');
@@ -935,52 +1198,52 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
 
   // 卡牌信息（整合 AI 分析）
   const info = [
-    (card.set_name) && `📦 系列: ${card.set_name}`,
-    (card.card_number) && `#️⃣ 编号: ${card.card_number}`,
-    (card.rarity) && `✨ 稀有度: ${card.rarity}`,
+    (card.set_name) && `${t.series}: ${card.set_name}`,
+    (card.card_number) && `${t.number}: ${card.card_number}`,
+    (card.rarity) && `${t.rarity}: ${card.rarity}`,
   ].filter(Boolean);
 
   // 添加发布时间
   if (card.release_date) {
-    info.push(`📅 发布时间: ${card.release_date}`);
+    info.push(`${t.release}: ${card.release_date}`);
   }
 
   // 添加 AI 分析到卡牌信息
   if (card.description) {
-    info.push(`📝 效果: ${card.description}`);
+    info.push(`${t.effect}: ${card.description}`);
   }
   if (card.collectible_value) {
     const valueMap = {
-      '收藏级珍品': '⭐⭐⭐⭐⭐',
-      '高收藏价值': '⭐⭐⭐⭐',
-      '中等收藏价值': '⭐⭐⭐',
-      '普通卡牌': '⭐⭐',
-      '基础卡牌': '⭐'
+      '收藏级珍品': '⭐⭐⭐⭐⭐', '高收藏价值': '⭐⭐⭐⭐', '中等收藏价值': '⭐⭐⭐', '普通卡牌': '⭐⭐', '基础卡牌': '⭐',
+      'Collectible gem': '⭐⭐⭐⭐⭐', 'High collectible value': '⭐⭐⭐⭐', 'Medium collectible value': '⭐⭐⭐', 'Normal card': '⭐⭐', 'Basic card': '⭐',
+      'Highly collectible': '⭐⭐⭐⭐', 'Standard card': '⭐⭐', 'Starter card': '⭐',
+      '收藏級珍品': '⭐⭐⭐⭐⭐', '高收藏價值': '⭐⭐⭐⭐', '中等收藏價值': '⭐⭐⭐', '普通卡牌': '⭐⭐', '基礎卡牌': '⭐',
+      '수집 품질': '⭐⭐⭐⭐⭐', '높은 수집 가치': '⭐⭐⭐⭐', '중간 수집 가치': '⭐⭐⭐', '일반 카드': '⭐⭐', '기본 카드': '⭐'
     };
     const stars = valueMap[card.collectible_value] || '⭐⭐';
-    info.push(`💎 收藏价值: ${stars} ${card.collectible_value}`);
+    info.push(`${t.collectible}: ${stars} ${card.collectible_value}`);
   }
   if (card.market_popularity) {
     const popularityMap = {
-      '超热门': '🔥🔥🔥',
-      '热门': '🔥🔥',
-      '一般': '🔥',
-      '冷门': '❄️'
+      '超热门': '🔥🔥🔥', '热门': '🔥🔥', '一般': '🔥', '冷门': '❄️',
+      'Super popular': '🔥🔥🔥', 'Very popular': '🔥🔥🔥', 'Popular': '🔥🔥', 'Average': '🔥', 'Moderate': '🔥', 'Niche': '❄️', 'Cold': '❄️',
+      '超熱門': '🔥🔥🔥', '熱門': '🔥🔥', '一般': '🔥', '冷門': '❄️',
+      '초인기': '🔥🔥🔥', '인기': '🔥🔥', '일반': '🔥', '비인기': '❄️'
     };
-    info.push(`📈 市场热度: ${popularityMap[card.market_popularity] || '🔥'} ${card.market_popularity}`);
+    info.push(`${t.popularity}: ${popularityMap[card.market_popularity] || '🔥'} ${card.market_popularity}`);
   }
   if (card.competitive_usage) {
-    info.push(`🏆 竞技: ${card.competitive_usage}`);
+    info.push(`${t.competitive}: ${card.competitive_usage}`);
   }
   if (card.highlights) {
-    info.push(`✨ 特点: ${card.highlights}`);
+    info.push(`${t.highlights}: ${card.highlights}`);
   }
 
-  info.push(`⚠️ 仅供参考，不一定准确`);
+  info.push(t.warning);
 
   if (info.length) {
     embed.addFields({
-      name: '📋 卡牌信息',
+      name: t.card_info || '📋 卡牌信息',
       value: info.join('\n')
     });
   }
@@ -992,7 +1255,7 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
       return `• [**${c.name}**](${googleSearch}) - ${c.reason}`;
     }).join('\n');
     embed.addFields({
-      name: '🔥 值得关注的卡牌',
+      name: t.related,
       value: relatedText
     });
   }
@@ -1007,8 +1270,8 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
   const searchUrl2 = `https://www.google.com/search?q=${searchQuery2}`;
 
   embed.addFields({
-    name: '🔗 价格查询',
-    value: `[🎯 仅角色名](${searchUrl1}) | [📦 完整信息](${searchUrl2})`
+    name: t.price_query,
+    value: `[${t.name_only}](${searchUrl1}) | [${t.full_info}](${searchUrl2})`
   });
 
   // 新增: 显示 API 返回的额外信息
@@ -1017,11 +1280,11 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
 
     // 基本详情
     const basicDetails = [];
-    if (priceResult.releaseDate) basicDetails.push(`📅 发售: ${priceResult.releaseDate}`);
-    if (priceResult.artist) basicDetails.push(`🎨 画师: ${priceResult.artist}`);
-    if (priceResult.set && !card.set_name) basicDetails.push(`📦 系列: ${priceResult.set}`);
+    if (priceResult.releaseDate) basicDetails.push(`${t.release_date}: ${priceResult.releaseDate}`);
+    if (priceResult.artist) basicDetails.push(`${t.artist}: ${priceResult.artist}`);
+    if (priceResult.set && !card.set_name) basicDetails.push(`${t.set_name}: ${priceResult.set}`);
     if (basicDetails.length) {
-      detailFields.push({ name: '📚 基本详情', value: basicDetails.join('\n') });
+      detailFields.push({ name: t.basic_details, value: basicDetails.join('\n') });
     }
 
     // Pokemon 特有信息
@@ -1029,36 +1292,36 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
       const info = priceResult.extraInfo;
       const pokemonDetails = [];
 
-      if (info.types) pokemonDetails.push(`⚡ 属性: ${info.types.join(', ')}`);
-      if (info.hp) pokemonDetails.push(`❤️ HP: ${info.hp}`);
-      if (info.set?.series) pokemonDetails.push(`📖 系列: ${info.set.series}`);
-      if (info.set?.ptcgoCode) pokemonDetails.push(`🔢 代码: ${info.set.ptcgoCode}`);
+      if (info.types) pokemonDetails.push(`${t.types}: ${info.types.join(', ')}`);
+      if (info.hp) pokemonDetails.push(`${t.hp}: ${info.hp}`);
+      if (info.set?.series) pokemonDetails.push(`${t.series_info}: ${info.set.series}`);
+      if (info.set?.ptcgoCode) pokemonDetails.push(`${t.code}: ${info.set.ptcgoCode}`);
 
       // 比赛合法性 - 扩展显示
       if (info.legalities) {
         const formats = [];
 
         // Standard 赛制
-        if (info.legalities.standard === 'Legal') formats.push('✅ Standard');
-        else if (info.legalities.standard === 'Banned') formats.push('❌ Standard');
+        if (info.legalities.standard === 'Legal') formats.push(`${t.legal} Standard`);
+        else if (info.legalities.standard === 'Banned') formats.push(`${t.banned} Standard`);
 
         // Expanded 赛制
-        if (info.legalities.expanded === 'Legal') formats.push('✅ Expanded');
-        else if (info.legalities.expanded === 'Banned') formats.push('❌ Expanded');
+        if (info.legalities.expanded === 'Legal') formats.push(`${t.legal} Expanded`);
+        else if (info.legalities.expanded === 'Banned') formats.push(`${t.banned} Expanded`);
 
         // Unlimited 赛制 (几乎所有卡都合法)
-        if (info.legalities.unlimited === 'Legal') formats.push('✅ Unlimited');
+        if (info.legalities.unlimited === 'Legal') formats.push(`${t.legal} Unlimited`);
 
         // Legacy 赛制
-        if (info.legalities.legacy === 'Legal') formats.push('✅ Legacy');
+        if (info.legalities.legacy === 'Legal') formats.push(`${t.legal} Legacy`);
 
         if (formats.length) {
-          pokemonDetails.push(`🏆 赛制: ${formats.join(' | ')}`);
+          pokemonDetails.push(`${t.formats}: ${formats.join(' | ')}`);
         }
       }
 
       if (pokemonDetails.length) {
-        detailFields.push({ name: '⚡ Pokemon 详情', value: pokemonDetails.join('\n') });
+        detailFields.push({ name: t.pokemon_details, value: pokemonDetails.join('\n') });
       }
 
       // 招式信息 (最多显示前2个)
@@ -1068,18 +1331,18 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
           const dmg = a.damage ? ` (${a.damage})` : '';
           return `${cost} ${a.name}${dmg}`;
         }).join('\n');
-        detailFields.push({ name: '⚔️ 招式', value: attackText, inline: false });
+        detailFields.push({ name: t.attacks, value: attackText, inline: false });
       }
 
       // 弱点
       if (info.weaknesses && info.weaknesses.length > 0) {
         const weakText = info.weaknesses.map(w => `${w.type} ${w.value}`).join(', ');
-        detailFields.push({ name: '💔 弱点', value: weakText });
+        detailFields.push({ name: t.weakness, value: weakText });
       }
 
       // 卡牌描述文字 (如果有)
       if (info.flavorText) {
-        detailFields.push({ name: '💬 卡牌描述', value: info.flavorText.slice(0, 100) + (info.flavorText.length > 100 ? '...' : '') });
+        detailFields.push({ name: t.card_description, value: info.flavorText.slice(0, 100) + (info.flavorText.length > 100 ? '...' : '') });
       }
 
       // 系列详细信息（新）
@@ -1108,7 +1371,7 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
         }
 
         if (setInfo.length) {
-          detailFields.push({ name: '📦 系列详情', value: setInfo.join('\n'), inline: false });
+          detailFields.push({ name: t.set_details, value: setInfo.join('\n'), inline: false });
         }
       }
     }
@@ -1183,7 +1446,29 @@ function buildPriceEmbed(card, priceResult, marketInfo = null) {
     }
   }
 
-  embed.setFooter({ text: `🧧 祝你开包大吉！ | ⚡ Powered by Gemini Vision` });
+  // Store card data in footer for translation functionality (base64 encoded)
+  const cardDataForStorage = {
+    game: card.game,
+    name_en: card.name_en,
+    name_jp: card.name_jp,
+    name_cn: card.name_cn,
+    set_name: card.set_name,
+    card_number: card.card_number,
+    rarity: card.rarity,
+    description: card.description,
+    collectible_value: card.collectible_value,
+    market_popularity: card.market_popularity,
+    competitive_usage: card.competitive_usage,
+    highlights: card.highlights,
+    release_date: card.release_date,
+    related_cards: card.related_cards,
+    priceResult: priceResult
+  };
+  const cardDataJSON = JSON.stringify(cardDataForStorage);
+  const cardDataBase64 = Buffer.from(cardDataJSON).toString('base64');
+
+  embed.setFooter({ text: `🧧 祝你开包大吉！ | ⚡ Powered by Gemini Vision | lang:${language}` });
+  embed.data.cardData = cardDataBase64; // Store in embed data
   return embed;
 }
 
@@ -1426,7 +1711,8 @@ discord.on(Events.MessageCreate, async (msg) => {
       return;
     }
 
-    await reply.edit({ content: '✅ 查询完成！', embeds: embeds.slice(0, 10) });
+    const editedMsg = await reply.edit({ content: '✅ 查询完成！', embeds: embeds.slice(0, 10), components: [createTranslationButtons()] });
+    cacheCardDataForMessage(editedMsg.id, embeds.slice(0, 10));
   } catch (e) {
     console.error('Error:', e);
     await reply.edit('❌ 处理出错了，请稍后重试。');
@@ -1466,6 +1752,72 @@ async function registerCommands() {
 }
 
 discord.on(Events.InteractionCreate, async (i) => {
+  // 处理翻译按钮点击（优先用内存缓存，因 Discord 不保存 embed 自定义 cardData）
+  if (i.isButton() && i.customId.startsWith('translate_')) {
+    console.log('🔔 Translation button clicked:', i.customId);
+    const language = i.customId.replace('translate_', '');
+
+    try {
+      await i.deferUpdate();
+
+      const messageId = i.message?.id;
+      let cardDataArray = messageId ? messageCardDataCache.get(String(messageId)) : null;
+
+      // 无缓存时尝试从 embed 解码（仅对未经过 Discord 的 embed 有效，通常无效）
+      if (!cardDataArray?.length && i.message?.embeds?.length) {
+        cardDataArray = [];
+        for (const embed of i.message.embeds) {
+          const raw = embed.data?.cardData ?? embed.cardData;
+          if (!raw) continue;
+          try {
+            cardDataArray.push(JSON.parse(Buffer.from(raw, 'base64').toString('utf-8')));
+          } catch (_) {}
+        }
+      }
+
+      if (!cardDataArray?.length) {
+        await i.editReply({
+          content: '❌ 无法获取原始卡牌数据，请重新扫描后再使用翻译。',
+          components: [createTranslationButtons()]
+        });
+        return;
+      }
+
+      // 非简体中文时用 Gemini 翻译卡牌正文（描述、稀有度、相关卡原因等）
+      let cardsToShow = cardDataArray;
+      if (language !== 'zh-CN') {
+        const langLabel = language === 'zh-TW' ? '繁體中文' : language === 'en-US' ? 'English' : '한국어';
+        await i.editReply({ content: `🔄 Translating to ${langLabel}…`, embeds: [], components: [] }).catch(() => {});
+        try {
+          cardsToShow = await Promise.all(
+            cardDataArray.map(card => translateCardContentWithGemini(card, language))
+          );
+        } catch (e) {
+          console.error('Batch translate error:', e);
+        }
+      }
+
+      const translatedEmbeds = cardsToShow.map(cardData =>
+        buildPriceEmbed(cardData, cardData.priceResult, null, language)
+      );
+
+      await i.editReply({
+        content: '',
+        embeds: translatedEmbeds,
+        components: [createTranslationButtons()]
+      });
+
+      console.log(`✅ Successfully translated to ${language}`);
+    } catch (error) {
+      console.error('Translation button error:', error);
+      await i.editReply({
+        content: '❌ 翻译失败，请稍后重试。',
+        components: [createTranslationButtons()]
+      });
+    }
+    return;
+  }
+
   if (!i.isChatInputCommand()) return;
 
   try {
@@ -1485,7 +1837,13 @@ discord.on(Events.InteractionCreate, async (i) => {
 
         if (!cards.length) return i.editReply('😅 没有识别出卡牌，请尝试更清晰的截图。');
 
-        await i.editReply({ embeds: embeds.slice(0, 10) });
+        console.log('📤 Sending reply with translation buttons...');
+        const sentMsg = await i.editReply({
+          embeds: embeds.slice(0, 10),
+          components: [createTranslationButtons()]
+        });
+        cacheCardDataForMessage(sentMsg.id, embeds.slice(0, 10));
+        console.log('✅ Reply sent with buttons');
       } catch (e) { console.error(e); await i.editReply('❌ 出错了，请稍后重试'); }
     }
 
@@ -1523,7 +1881,17 @@ discord.on(Events.InteractionCreate, async (i) => {
 // ============================================================
 // 启动
 // ============================================================
-discord.on(Events.ClientReady, () => console.log(`✅ Bot 上线: ${discord.user.tag}`));
+discord.on(Events.ClientReady, () => {
+  console.log(`✅ Bot 上线: ${discord.user.tag}`);
+  // 测试按钮函数
+  try {
+    console.log('🧪 Testing createTranslationButtons() function...');
+    const testButtons = createTranslationButtons();
+    console.log('✅ Button function works! Button data:', JSON.stringify(testButtons));
+  } catch (error) {
+    console.error('❌ Button function error:', error);
+  }
+});
 registerCommands();
 discord.login(process.env.DISCORD_TOKEN);
 
