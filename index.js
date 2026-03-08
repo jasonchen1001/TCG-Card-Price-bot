@@ -568,7 +568,7 @@ async function identifyCards(imageUrl) {
 // ============================================================
 // Gemini 卡牌内容翻译（描述/稀有度/相关卡原因 等中文 → 目标语言）
 // ============================================================
-const LANGUAGE_NAMES = { 'zh-TW': 'Traditional Chinese', 'en-US': 'English', 'ko-KR': 'Korean' };
+const LANGUAGE_NAMES = { 'zh-TW': 'Traditional Chinese (Taiwan, 繁體中文)', 'en-US': 'English', 'ko-KR': 'Korean' };
 
 async function translateCardContentWithGemini(cardData, targetLang) {
   if (targetLang === 'zh-CN') return cardData;
@@ -584,14 +584,19 @@ async function translateCardContentWithGemini(cardData, targetLang) {
   const hasAny = Object.values(textFields).some(v => v != null && (Array.isArray(v) ? v.length : String(v).trim()));
   if (!hasAny) return cardData;
 
-  const prompt = `You are a translator for TCG card text. Translate the following from Chinese to ${langName}.
+  const sourceLang = 'Simplified Chinese (简体中文)';
+  const targetNote = targetLang === 'zh-TW'
+    ? 'IMPORTANT: You MUST convert ALL text to Traditional Chinese characters (繁體字). Do NOT use Simplified Chinese (简体字) in the output. Use Taiwan conventions (e.g., 發布→發布, 資訊→資訊, 稀有度→稀有度).'
+    : '';
+  const prompt = `You are a translator for TCG card text. Translate the following from ${sourceLang} to ${langName}.
 Rules:
 - Return ONLY a valid JSON object with the same keys. No markdown, no explanation.
 - For related_cards: keep "name" unchanged; translate only "reason" to ${langName}.
 - Keep null/empty values as null.
 - Use natural, fluent ${langName} for card descriptions and labels.
+${targetNote}
 
-Input (Chinese):
+Input (${sourceLang}):
 ${JSON.stringify(textFields)}
 
 Output (same structure, all text in ${langName}):`;
