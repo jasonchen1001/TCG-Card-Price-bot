@@ -404,12 +404,12 @@ const TRANSLATIONS = {
     effect: '📝 효과',
     collectible: '💎 수집 가치',
     popularity: '📈 시장 인기도',
-    competitive: '🏆 경쟁',
+    competitive: '🏆 카드 게임',
     highlights: '✨ 특징',
     warning: '⚠️ 참고용이며 정확하지 않을 수 있습니다',
     related: '🔥 주목할 만한 카드',
     price_query: '🔗 가격 조회',
-    name_only: '🎯 캐릭터명만',
+    name_only: '🎯 캐릭터명',
     full_info: '📦 전체 정보',
     basic_details: '📚 기본 정보',
     price_details: '💰 가격 상세',
@@ -1408,16 +1408,16 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
       '수집 품질': '⭐⭐⭐⭐⭐', '높은 수집 가치': '⭐⭐⭐⭐', '중간 수집 가치': '⭐⭐⭐', '일반 카드': '⭐⭐', '기본 카드': '⭐'
     };
     const stars = valueMap[card.collectible_value] || '⭐⭐';
-    info.push(`${t.collectible}: ${stars} ${card.collectible_value}`);
+    info.push(`${t.collectible}: ${stars}`);
   }
   if (card.market_popularity) {
     const popularityMap = {
       '超热门': '🔥🔥🔥', '热门': '🔥🔥', '一般': '🔥', '冷门': '❄️',
       'Super popular': '🔥🔥🔥', 'Very popular': '🔥🔥🔥', 'Popular': '🔥🔥', 'Average': '🔥', 'Moderate': '🔥', 'Niche': '❄️', 'Cold': '❄️',
-      '超熱門': '🔥🔥🔥', '熱門': '🔥🔥', '一般': '🔥', '冷門': '❄️',
+      '超熱門': '🔥🔥🔥', '熱門': '🔥🔥', '冷門': '❄️',
       '초인기': '🔥🔥🔥', '인기': '🔥🔥', '일반': '🔥', '비인기': '❄️'
     };
-    info.push(`${t.popularity}: ${popularityMap[card.market_popularity] || '🔥'} ${card.market_popularity}`);
+    info.push(`${t.popularity}: ${popularityMap[card.market_popularity] || '🔥'}`);
   }
   if (card.competitive_usage) {
     info.push(`${t.competitive}: ${card.competitive_usage}`);
