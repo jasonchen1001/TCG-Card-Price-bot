@@ -1721,7 +1721,6 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
     (card.set_name) && `${t.series}: ${card.set_name}`,
     (card.card_number) && `${t.number}: ${card.card_number}`,
     (card.rarity) && `${t.rarity}: ${card.rarity}`,
-    (card.language && card.language !== 'English') && `${t.language}: ${card.language}`,
   ].filter(Boolean);
 
   // 添加发布时间
