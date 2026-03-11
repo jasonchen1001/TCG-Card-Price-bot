@@ -503,6 +503,14 @@ Label text has higher priority than the card artwork.
 
 Extract the card name, set name, card number, and grading information from the label.
 
+LANGUAGE DETECTION for graded cards:
+- The "language" field refers to the CARD's printed language, not the label language.
+- Determine card language from the label text clues:
+  - If the label says "Japanese" or shows Japanese set names → Japanese
+  - If the label text is in English (e.g. "BRILLIANT STARS", "CHARIZARD V") → English
+  - Default to English if unclear.
+- name_jp is just an alternate name field; its presence does NOT mean the card is Japanese.
+
 2. If no grading label exists:
 
 Read information directly from the card face.
