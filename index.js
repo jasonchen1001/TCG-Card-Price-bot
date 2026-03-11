@@ -482,9 +482,11 @@ const CARD_IDENTIFY_PROMPT = `You are a professional trading card identification
 
 Analyze the trading card shown in the image and extract structured information.
 
-All descriptive text in the output MUST be written in Chinese.
-
-Card names, set names, and card numbers must remain in their original language.
+CRITICAL OUTPUT LANGUAGE RULE:
+- All descriptive text fields (description, related_cards[].reason, ocr_raw) MUST be written in Simplified Chinese (简体中文).
+- This applies regardless of the card's language (English / Japanese / Chinese).
+- Do NOT write any of these fields in Japanese, English, or any other language.
+- Card names (name_en, name_jp, name_cn), set names, and card numbers remain in their original language.
 
 Supported games include:
 Pokemon
@@ -747,23 +749,23 @@ async function translateCardContentWithGemini(cardData, targetLang) {
   const hasAny = Object.values(textFields).some(v => v != null && (Array.isArray(v) ? v.length : String(v).trim()));
   if (!hasAny) return cardData;
 
-  const sourceLang = 'Simplified Chinese (简体中文)';
   const targetNote = targetLang === 'zh-TW'
     ? 'IMPORTANT: Convert ALL text to Traditional Chinese (繁體字). Do NOT use Simplified Chinese. Use Taiwan conventions.'
     : '';
 
-  const prompt = `You are a translator for TCG card text. Translate from ${sourceLang} to ${langName}.
+  const prompt = `You are a translator for TCG card game text. Translate ALL text fields in the JSON below to ${langName}.
 
 Rules:
 - Return ONLY a valid JSON object with the same keys. No markdown, no explanation.
+- Translate ALL string values to ${langName}, regardless of their source language (Chinese, Japanese, or English).
 - For related_cards: keep "name" field unchanged (it is an English card name); translate only "reason" to ${langName}.
-- For effect_text: translate to ${langName}. If the original is Japanese, translate the Japanese text to ${langName}. Keep game mechanic terms natural for ${langName} speakers.
-- For description: translate to ${langName}.
+- For effect_text and description: translate to ${langName} no matter what language the input is in.
+- Keep game mechanic terms natural for ${langName} speakers.
 - Keep null values as null.
 - Use natural, fluent ${langName}.
 ${targetNote}
 
-Input (${sourceLang}):
+Input JSON:
 ${JSON.stringify(textFields)}
 
 Output (${langName}):`;
