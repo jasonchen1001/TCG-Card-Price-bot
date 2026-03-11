@@ -298,6 +298,7 @@ const TRANSLATIONS = {
     legal: '✅',
     banned: '❌',
     card_info: '📋 卡牌信息',
+    intro: '💬 简介',
     name_label: '📛 名称',
     color: '🎨 颜色',
     card_type: '🎴 类型',
@@ -351,6 +352,7 @@ const TRANSLATIONS = {
     legal: '✅',
     banned: '❌',
     card_info: '📋 卡牌資訊',
+    intro: '💬 簡介',
     name_label: '📛 名稱',
     color: '🎨 顏色',
     card_type: '🎴 類型',
@@ -404,6 +406,7 @@ const TRANSLATIONS = {
     legal: '✅',
     banned: '❌',
     card_info: '📋 Card Info',
+    intro: '💬 Card Summary',
     name_label: '📛 Name',
     color: '🎨 Color',
     card_type: '🎴 Type',
@@ -457,6 +460,7 @@ const TRANSLATIONS = {
     legal: '✅',
     banned: '❌',
     card_info: '📋 카드 정보',
+    intro: '💬 카드 요약',
     name_label: '📛 이름',
     color: '🎨 색상',
     card_type: '🎴 유형',
@@ -581,6 +585,24 @@ Others
 → 一般
 
 ------------------------------------------------
+EFFECT TEXT RULE
+
+If the card has ability / attack / effect text visible on the card face:
+- Extract the full effect text in its ORIGINAL language (do not translate here).
+- For Japanese cards: extract Japanese text (will be translated later).
+- For English cards: extract English text as-is.
+- For Chinese cards: extract Chinese text as-is.
+- For graded cards in a slab: if effect text is NOT visible, return null.
+- Store raw extracted effect text in "effect_text".
+
+------------------------------------------------
+DESCRIPTION RULE
+
+Write a SHORT Chinese analysis (50-80 characters) about this card.
+Focus on: what makes it special, its role in the game, or collector appeal.
+Store in "description".
+
+------------------------------------------------
 RELATED CARDS
 
 Return 2-3 cards that are related by:
@@ -609,6 +631,8 @@ Do not include explanations.
   "release_date": "YYYY-MM-DD or null",
   "collectible_value": "收藏级珍品 | 高收藏价值 | 中等收藏价值 | 普通卡牌 | 基础卡牌",
   "market_popularity": "超热门 | 热门 | 一般 | 冷门",
+  "effect_text": "原文效果文字（保留原语言）或 null",
+  "description": "50-80字中文AI简介",
   "grading_company": "PSA | CGC | BGS | ACE | null",
   "grade": "10 | 9.5 | 9 | null",
   "grade_label": "GEM MT | PRISTINE | MINT | null",
@@ -704,6 +728,8 @@ async function translateCardContentWithGemini(cardData, targetLang) {
   const textFields = {
     name_cn: cardData.name_cn,
     character_name: cardData.character_name,
+    effect_text: cardData.effect_text,
+    description: cardData.description,
     related_cards: cardData.related_cards,
   };
 
@@ -720,6 +746,8 @@ async function translateCardContentWithGemini(cardData, targetLang) {
 Rules:
 - Return ONLY a valid JSON object with the same keys. No markdown, no explanation.
 - For related_cards: keep "name" field unchanged (it is an English card name); translate only "reason" to ${langName}.
+- For effect_text: translate to ${langName}. If the original is Japanese, translate the Japanese text to ${langName}. Keep game mechanic terms natural for ${langName} speakers.
+- For description: translate to ${langName}.
 - Keep null values as null.
 - Use natural, fluent ${langName}.
 ${targetNote}
@@ -761,6 +789,8 @@ Output (${langName}):`;
       ...cardData,
       name_cn: translated.name_cn ?? cardData.name_cn,
       character_name: translated.character_name ?? cardData.character_name,
+      effect_text: translated.effect_text ?? cardData.effect_text,
+      description: translated.description ?? cardData.description,
       related_cards: Array.isArray(translated.related_cards) ? translated.related_cards : cardData.related_cards,
     };
   };
@@ -1707,10 +1737,28 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
     info.push(`${t.popularity}: ${popularityMap[card.market_popularity] || '🔥'}`);
   }
 
+  info.push(t.warning);
+
   if (info.length) {
     embed.addFields({
       name: t.card_info || '📋 卡牌信息',
       value: info.join('\n')
+    });
+  }
+
+  // 简介：效果文字 + AI 分析
+  const introParts = [];
+  if (card.effect_text) {
+    introParts.push(`**📝 ${t.effect || '效果'}**\n${card.effect_text}`);
+  }
+  if (card.description) {
+    introParts.push(`**🤖 AI**\n${card.description}`);
+  }
+  if (introParts.length > 0) {
+    const introValue = introParts.join('\n\n');
+    embed.addFields({
+      name: t.intro || '💬 简介',
+      value: introValue.length > 1024 ? introValue.substring(0, 1021) + '...' : introValue,
     });
   }
 
@@ -1945,6 +1993,8 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
     grade: card.grade ?? null,
     grade_label: card.grade_label ?? null,
     cert_number: card.cert_number ?? null,
+    effect_text: card.effect_text ?? null,
+    description: card.description ?? null,
     search_keywords: card.search_keywords ?? null,
     related_cards: card.related_cards ?? null,
     priceResult: priceResult,
