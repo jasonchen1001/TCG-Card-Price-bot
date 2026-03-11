@@ -598,8 +598,10 @@ If the card has ability / attack / effect text visible on the card face:
 ------------------------------------------------
 DESCRIPTION RULE
 
-Write a SHORT Chinese analysis (50-80 characters) about this card.
-Focus on: what makes it special, its role in the game, or collector appeal.
+Write a single natural Chinese paragraph (80-150 characters) about this card.
+Structure: describe the card's visual scene or character depiction → mention its series and rarity → naturally include any ability/attack effects if visible.
+Example: "这张卡牌是宝可梦卡牌151系列中的艺术稀有卡，描绘了皮卡丘与小智在街头的互动场景。它拥有招式「十万伏特」，可造成对手60点伤害。"
+If no effect is visible (e.g. graded slab obscures it), omit the effect part.
 Store in "description".
 
 ------------------------------------------------
@@ -1746,19 +1748,14 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
     });
   }
 
-  // 简介：效果文字 + AI 分析
-  const introParts = [];
-  if (card.effect_text) {
-    introParts.push(`**📝 ${t.effect || '效果'}**\n${card.effect_text}`);
-  }
+  // 简介：AI 生成的自然段落（已整合效果文字）
   if (card.description) {
-    introParts.push(`**🤖 AI**\n${card.description}`);
-  }
-  if (introParts.length > 0) {
-    const introValue = introParts.join('\n\n');
+    const introValue = card.description.length > 1024
+      ? card.description.substring(0, 1021) + '...'
+      : card.description;
     embed.addFields({
       name: t.intro || '💬 简介',
-      value: introValue.length > 1024 ? introValue.substring(0, 1021) + '...' : introValue,
+      value: introValue,
     });
   }
 
