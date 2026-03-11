@@ -700,11 +700,10 @@ async function translateCardContentWithGemini(cardData, targetLang) {
   const langName = LANGUAGE_NAMES[targetLang] || 'English';
 
   // 只翻译中文描述性字段，card name / set name / card number 保持原文
+  // collectible_value / market_popularity 不翻译，保留中文用于 emoji 映射
   const textFields = {
     name_cn: cardData.name_cn,
     character_name: cardData.character_name,
-    collectible_value: cardData.collectible_value,
-    market_popularity: cardData.market_popularity,
     related_cards: cardData.related_cards,
   };
 
@@ -723,7 +722,6 @@ Rules:
 - For related_cards: keep "name" field unchanged (it is an English card name); translate only "reason" to ${langName}.
 - Keep null values as null.
 - Use natural, fluent ${langName}.
-- collectible_value and market_popularity should use idiomatic ${langName} equivalents.
 ${targetNote}
 
 Input (${sourceLang}):
@@ -763,8 +761,6 @@ Output (${langName}):`;
       ...cardData,
       name_cn: translated.name_cn ?? cardData.name_cn,
       character_name: translated.character_name ?? cardData.character_name,
-      collectible_value: translated.collectible_value ?? cardData.collectible_value,
-      market_popularity: translated.market_popularity ?? cardData.market_popularity,
       related_cards: Array.isArray(translated.related_cards) ? translated.related_cards : cardData.related_cards,
     };
   };
@@ -1651,8 +1647,7 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
 
   const embed = new EmbedBuilder()
     .setColor(0xffd700)
-    .setTitle(`${EMOJI[card.game] || '🎴'} ${card.name_en || card.name_cn}${t.title_suffix}`)
-    .setTimestamp();
+    .setTitle(`${EMOJI[card.game] || '🎴'} ${card.name_en || card.name_cn}${t.title_suffix}`);
 
   const names = [card.name_cn, card.name_jp].filter(Boolean).join(' | ');
   if (names) embed.setDescription(names);
@@ -1957,7 +1952,8 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
   const cardDataJSON = JSON.stringify(cardDataForStorage);
   const cardDataBase64 = Buffer.from(cardDataJSON).toString('base64');
 
-  embed.setFooter({ text: `${t.pack_wish || '🧧 祝你开包大吉！'} | ${t.warning} | ⚡ Powered by Gemini Vision` });
+  const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
+  embed.setFooter({ text: `${t.pack_wish || '🧧 祝你开包大吉！'} | ${t.warning} | ⚡ Powered by Gemini Vision | ${nowStr} UTC` });
   embed.data.cardData = cardDataBase64; // Store in embed data
   return embed;
 }
@@ -1973,8 +1969,7 @@ function buildSearchEmbed(searchResult, query, game, language = 'zh-CN') {
     const embed = new EmbedBuilder()
       .setColor(0xff6b6b)
       .setTitle(`${t.search_result_title}: ${query}`)
-      .setDescription(searchResult.formatHint || '😅 未找到匹配的卡牌，请检查卡牌编号是否正确。')
-      .setTimestamp();
+      .setDescription(searchResult.formatHint || '😅 未找到匹配的卡牌，请检查卡牌编号是否正确。');
     const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(query + ' ' + game + ' card')}`;
     embed.addFields({
       name: t.manual_search,
@@ -1991,15 +1986,13 @@ function buildSearchEmbed(searchResult, query, game, language = 'zh-CN') {
       .setColor(0x00bfff)
       .setTitle(`${t.search_result_title}: ${query}`)
       .setDescription(`📋 ${t.found_versions.replace('{n}', cards.length)}`)
-      .setTimestamp()
-      .setFooter({ text: `${t.pack_wish || '🧧 祝你开包大吉！'} | ${t.warning} | ⚡ ${t.data_source}: OPTCG API` });
+      .setFooter({ text: `${t.pack_wish || '🧧 祝你开包大吉！'} | ${t.warning} | ⚡ ${t.data_source}: OPTCG API | ${new Date().toISOString().replace('T', ' ').substring(0, 16)} UTC` });
     embeds.push(summaryEmbed);
 
     cards.forEach((card, index) => {
       const embed = new EmbedBuilder()
         .setColor(0xffd700)
-        .setTitle(`${t.version} ${index + 1}: ${card.name}`)
-        .setTimestamp();
+        .setTitle(`${t.version} ${index + 1}: ${card.name}`);
       const info = [
         (card.name) && `${t.name_label}: ${card.name}`,
         (card.set) && `${t.series}: ${card.set}`,
@@ -2026,8 +2019,7 @@ function buildSearchEmbed(searchResult, query, game, language = 'zh-CN') {
   const card = searchResult;
   const embed = new EmbedBuilder()
     .setColor(0x00bfff)
-    .setTitle(`${t.search_result_title}: ${query}`)
-    .setTimestamp();
+    .setTitle(`${t.search_result_title}: ${query}`);
   const info = [
     (card.name) && `${t.name_label}: ${card.name}`,
     (card.set) && `${t.series}: ${card.set}`,
@@ -2047,7 +2039,7 @@ function buildSearchEmbed(searchResult, query, game, language = 'zh-CN') {
     embed.addFields({ name: t.card_info || '📋 卡牌信息', value: info.join('\n') });
   }
   if (card.image) embed.setImage(card.image);
-  embed.setFooter({ text: `${t.pack_wish || '🧧 祝你开包大吉！'} | ${t.warning} | ⚡ ${t.data_source}: ${card.source || 'OPTCG API'}` });
+  embed.setFooter({ text: `${t.pack_wish || '🧧 祝你开包大吉！'} | ${t.warning} | ⚡ ${t.data_source}: ${card.source || 'OPTCG API'} | ${new Date().toISOString().replace('T', ' ').substring(0, 16)} UTC` });
   return [embed];
 }
 
