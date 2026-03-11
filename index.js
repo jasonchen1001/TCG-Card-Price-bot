@@ -598,8 +598,9 @@ If the card has ability / attack / effect text visible on the card face:
 ------------------------------------------------
 DESCRIPTION RULE
 
-Write a single natural Chinese paragraph (80-150 characters) about this card.
-Structure: describe the card's visual scene or character depiction → mention its series and rarity → naturally include any ability/attack effects if visible.
+Write a single natural SIMPLIFIED CHINESE paragraph (80-150 characters) about this card.
+IMPORTANT: description MUST always be written in Simplified Chinese (简体中文), regardless of the card's language.
+Structure: describe the card's visual scene or character depiction → mention its series and rarity → naturally include any ability/attack effects if visible (translate effect text to Chinese).
 Example: "这张卡牌是宝可梦卡牌151系列中的艺术稀有卡，描绘了皮卡丘与小智在街头的互动场景。它拥有招式「十万伏特」，可造成对手60点伤害。"
 If no effect is visible (e.g. graded slab obscures it), omit the effect part.
 Store in "description".
