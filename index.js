@@ -276,6 +276,8 @@ const TRANSLATIONS = {
     name_only: '🎯 仅角色名',
     full_info: '📦 完整信息',
     ebay_sold: '🛒 eBay 成交记录',
+    ebay_chart: '📊 eBay 成交走势',
+    ebay_chart_stats: (n, avg, min, max) => `最近 ${n} 笔 · 均价 **$${avg}** · 区间 $${min} ~ $${max}`,
     grading: '评级',
     cert: '证书',
     market_price: '💰 市场价格',
@@ -330,6 +332,8 @@ const TRANSLATIONS = {
     name_only: '🎯 僅角色名',
     full_info: '📦 完整資訊',
     ebay_sold: '🛒 eBay 成交紀錄',
+    ebay_chart: '📊 eBay 成交走勢',
+    ebay_chart_stats: (n, avg, min, max) => `近 ${n} 筆 · 均價 **$${avg}** · 區間 $${min} ~ $${max}`,
     grading: '評級',
     cert: '證書',
     market_price: '💰 市場價格',
@@ -384,6 +388,8 @@ const TRANSLATIONS = {
     name_only: '🎯 Name Only',
     full_info: '📦 Full Info',
     ebay_sold: '🛒 eBay Sold Listings',
+    ebay_chart: '📊 eBay Sold Price Trend',
+    ebay_chart_stats: (n, avg, min, max) => `${n} sales · Avg **$${avg}** · Range $${min} ~ $${max}`,
     grading: 'Grading',
     cert: 'Cert',
     market_price: '💰 Market Price',
@@ -438,6 +444,8 @@ const TRANSLATIONS = {
     name_only: '🎯 캐릭터명',
     full_info: '📦 전체 정보',
     ebay_sold: '🛒 eBay 판매 내역',
+    ebay_chart: '📊 eBay 판매 추이',
+    ebay_chart_stats: (n, avg, min, max) => `최근 ${n}건 · 평균 **$${avg}** · 범위 $${min} ~ $${max}`,
     grading: '등급',
     cert: '인증서',
     market_price: '💰 시장 가격',
@@ -1351,6 +1359,111 @@ function generatePriceChartUrl(priceHistory, cardName) {
   return `https://quickchart.io/chart?c=${encoded}&width=600&height=200&bkg=white`;
 }
 
+// ============================================================
+// eBay Finding API - 真实成交记录查询
+// ============================================================
+async function queryEbaySoldHistory(keyword) {
+  const appId = process.env.EBAY_APP_ID;
+  if (!appId || appId === 'your_ebay_app_id_here') return null;
+
+  const isSandbox = process.env.EBAY_SANDBOX === 'true';
+  const baseUrl = isSandbox
+    ? 'https://svcs.sandbox.ebay.com/services/search/FindingService/v1'
+    : 'https://svcs.ebay.com/services/search/FindingService/v1';
+
+  const params = new URLSearchParams({
+    'OPERATION-NAME': 'findCompletedItems',
+    'SERVICE-VERSION': '1.0.0',
+    'SECURITY-APPNAME': appId,
+    'RESPONSE-DATA-FORMAT': 'JSON',
+    'keywords': keyword,
+    'itemFilter(0).name': 'SoldItemsOnly',
+    'itemFilter(0).value': 'true',
+    'sortOrder': 'EndTimeSoonest',
+    'paginationInput.entriesPerPage': '50',
+    'paginationInput.pageNumber': '1',
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}?${params}`);
+    if (!response.ok) {
+      console.error(`[eBay] HTTP ${response.status}`);
+      return null;
+    }
+    const data = await response.json();
+    const items = data?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
+
+    const sold = items
+      .filter(item => item.sellingStatus?.[0]?.sellingState?.[0] === 'EndedWithSales')
+      .map(item => ({
+        price: parseFloat(item.sellingStatus?.[0]?.currentPrice?.[0]?.__value__ || 0),
+        currency: item.sellingStatus?.[0]?.currentPrice?.[0]?.['@currencyId'] || 'USD',
+        date: item.listingInfo?.[0]?.endTime?.[0] || '',
+        title: item.title?.[0] || '',
+      }))
+      .filter(item => item.price > 0)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    console.log(`[eBay] keyword="${keyword}" → ${sold.length} sold items`);
+    return sold.length > 0 ? sold : null;
+  } catch (e) {
+    console.error(`[eBay] query error: ${e.message}`);
+    return null;
+  }
+}
+
+function generateEbayChartUrl(soldItems) {
+  if (!soldItems || soldItems.length < 2) return null;
+
+  const maxPoints = 30;
+  const step = Math.max(1, Math.floor(soldItems.length / maxPoints));
+  const sampled = soldItems.filter((_, i) => i % step === 0).slice(-maxPoints);
+
+  const labels = sampled.map(item => {
+    const d = new Date(item.date);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  });
+  const prices = sampled.map(item => Number(item.price.toFixed(2)));
+
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  const padding = (maxPrice - minPrice) * 0.15 || 5;
+
+  const chartConfig = {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'eBay Sold (USD)',
+        data: prices,
+        fill: true,
+        borderColor: '#e53935',
+        backgroundColor: 'rgba(229,57,53,0.12)',
+        pointRadius: sampled.length > 15 ? 0 : 3,
+        borderWidth: 2,
+        tension: 0.3,
+      }],
+    },
+    options: {
+      legend: { display: true },
+      scales: {
+        xAxes: [{ ticks: { fontSize: 10, maxTicksLimit: 8, fontColor: '#555' } }],
+        yAxes: [{
+          ticks: {
+            fontSize: 10,
+            fontColor: '#555',
+            min: Math.max(0, Math.floor(minPrice - padding)),
+            max: Math.ceil(maxPrice + padding),
+          },
+        }],
+      },
+    },
+  };
+
+  const encoded = encodeURIComponent(JSON.stringify(chartConfig));
+  return `https://quickchart.io/chart?c=${encoded}&width=600&height=200&bkg=white`;
+}
+
 // --- 通用 (JustTCG - 多游戏支持，可选) ---
 async function queryJustTCG(card) {
   if (!process.env.JUSTTCG_API_KEY) return { found: false };
@@ -1685,7 +1798,7 @@ async function getCardMarketInfo(card) {
   return null;
 }
 
-function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN') {
+function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN', ebaySoldData = null) {
   const t = TRANSLATIONS[language] || TRANSLATIONS['zh-CN'];
 
   const embed = new EmbedBuilder()
@@ -1808,6 +1921,24 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
       `[${t.ebay_sold}](${ebayUrl})`,
     ].join('\n'),
   });
+
+  // eBay 真实成交折线图
+  if (ebaySoldData && ebaySoldData.length >= 2) {
+    const ebayChartUrl = generateEbayChartUrl(ebaySoldData);
+    if (ebayChartUrl) {
+      const prices = ebaySoldData.map(i => i.price);
+      const avgPrice = (prices.reduce((a, b) => a + b, 0) / prices.length).toFixed(2);
+      const minP = Math.min(...prices).toFixed(2);
+      const maxP = Math.max(...prices).toFixed(2);
+      embed.addFields({
+        name: t.ebay_chart || '📊 eBay 成交走势',
+        value: t.ebay_chart_stats
+          ? t.ebay_chart_stats(ebaySoldData.length, avgPrice, minP, maxP)
+          : `最近 ${ebaySoldData.length} 笔 · 均价 **$${avgPrice}** · 区间 $${minP} ~ $${maxP}`,
+      });
+      embed.setImage(ebayChartUrl);
+    }
+  }
 
   // 新增: 显示 API 返回的额外信息
   if (priceResult && priceResult.found) {
@@ -2134,7 +2265,21 @@ async function processCardImage(imageUrl, gameOverride) {
       }
     }
 
-    embeds.push(buildPriceEmbed(card, priceResult, marketInfo));
+    // eBay 真实成交记录
+    let ebaySoldData = null;
+    if (process.env.EBAY_APP_ID && process.env.EBAY_APP_ID !== 'your_ebay_app_id_here') {
+      try {
+        const skw = card.search_keywords || {};
+        const ebayKeyword = skw.card || `${card.name_en || card.name_cn || ''} ${card.card_number || ''}`.trim();
+        const gradingSuffix = card.grading_company ? ` ${card.grading_company} ${card.grade ?? ''}`.trim() : '';
+        ebaySoldData = await queryEbaySoldHistory(ebayKeyword + gradingSuffix);
+      } catch (e) {
+        console.error('eBay query error:', e.message);
+      }
+    }
+
+    card.ebaySoldData = ebaySoldData;
+    embeds.push(buildPriceEmbed(card, priceResult, marketInfo, 'zh-CN', ebaySoldData));
   }
 
   return { cards, embeds };
@@ -2315,7 +2460,7 @@ discord.on(Events.InteractionCreate, async (i) => {
       }
 
       const translatedEmbeds = cardsToShow.map(cardData =>
-        buildPriceEmbed(cardData, cardData.priceResult, null, language)
+        buildPriceEmbed(cardData, cardData.priceResult, null, language, cardData.ebaySoldData ?? null)
       );
 
       await i.editReply({
