@@ -1366,7 +1366,10 @@ async function queryEbaySoldHistory(keyword) {
   const appId = process.env.EBAY_APP_ID;
   if (!appId || appId === 'your_ebay_app_id_here') return null;
 
-  const isSandbox = process.env.EBAY_SANDBOX === 'true';
+  // 自动检测：Sandbox App ID 包含 "sandbox" 或 "-SBX-"
+  const isSandbox = process.env.EBAY_SANDBOX === 'true'
+    || appId.toLowerCase().includes('sandbox')
+    || appId.includes('-SBX-');
   const baseUrl = isSandbox
     ? 'https://svcs.sandbox.ebay.com/services/search/FindingService/v1'
     : 'https://svcs.ebay.com/services/search/FindingService/v1';
@@ -1385,9 +1388,12 @@ async function queryEbaySoldHistory(keyword) {
   });
 
   try {
-    const response = await fetch(`${baseUrl}?${params}`);
+    const requestUrl = `${baseUrl}?${params}`;
+    console.log(`[eBay] Requesting: ${isSandbox ? 'SANDBOX' : 'PROD'} keyword="${keyword}"`);
+    const response = await fetch(requestUrl);
     if (!response.ok) {
-      console.error(`[eBay] HTTP ${response.status}`);
+      const errText = await response.text();
+      console.error(`[eBay] HTTP ${response.status}: ${errText.substring(0, 300)}`);
       return null;
     }
     const data = await response.json();
