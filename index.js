@@ -571,36 +571,63 @@ SP
 L
 
 ------------------------------------------------
-COLLECTIBILITY (based on rarity)
+COLLECTIBILITY RULES
 
-SAR / Secret Rare / SP / Gold / UR
-→ 收藏级珍品 ⭐⭐⭐⭐⭐
+Base score from rarity:
+- SAR / Secret Rare / SP / Gold / UR / Promo (tournament/event exclusive) → 收藏级珍品 ⭐⭐⭐⭐⭐
+- Full Art / SR / Art Rare / SEC → 高收藏价值 ⭐⭐⭐⭐
+- Holo Rare / Rare → 中等收藏价值 ⭐⭐⭐
+- Uncommon → 普通卡牌 ⭐⭐
+- Common → 基础卡牌 ⭐
 
-Full Art / SR / Art Rare
-→ 高收藏价值 ⭐⭐⭐⭐
+Upgrade rules (raise by one tier):
+- If graded PSA/CGC/BGS 10 or PRISTINE → upgrade one tier
+- If graded 9.5 → keep current tier
+- If character is iconic (Charizard, Pikachu, Luffy, Zoro) → upgrade one tier
+- Maximum is 收藏级珍品 ⭐⭐⭐⭐⭐
 
-Holo / Rare
-→ 中等收藏价值 ⭐⭐⭐
-
-Uncommon
-→ 普通卡牌 ⭐⭐
-
-Common
-→ 基础卡牌 ⭐
+Examples:
+- Gold rarity + CGC PRISTINE 10 + Luffy → 收藏级珍品 ⭐⭐⭐⭐⭐
+- SR + PSA 10 → 收藏级珍品 ⭐⭐⭐⭐⭐
+- Common + no grade → 基础卡牌 ⭐
 
 ------------------------------------------------
-POPULARITY (based on character recognition)
+POPULARITY RULES
 
-Very popular characters:
-Charizard, Pikachu, Luffy, Zoro, Lillie
+Based on character fame AND card scarcity:
 
+Iconic characters (Charizard, Pikachu, Luffy, Zoro, Shanks, Kaido, Goku, Naruto):
 → 超热门
 
-Well-known characters
+Well-known main characters in their franchise:
 → 热门
+
+Supporting characters or lesser-known characters:
+→ 一般
+
+Obscure or background characters:
+→ 冷门
+
+Upgrade: if rarity is SP/Gold/SAR/UR, raise popularity by one tier.
 
 Others
 → 一般
+
+------------------------------------------------
+RELEASE TYPE RULE
+
+Determine how the card was distributed:
+- pack: obtained from booster packs (most cards)
+- promo: general promotional card (gift, magazine, McDonald's, etc.)
+- event: distributed at specific events, game stores, or as contest/competition awards (illustration contest, drawing contest, fan art award, etc.)
+- tournament: exclusive to tournament participants or top finishers (World Championship, National Championship, etc.)
+- null: cannot determine
+
+Clues:
+- tournament: set/card name contains "Tournament", "Championship", "World Finals", "World Champ", "National", or card is explicitly a top-finisher prize
+- event: set/card name contains "Illustrator", "Illustration Contest", "Contest", "Award", "Event", "League", "Game Store", or is known as a competition award card (e.g. Pokémon Illustrator)
+- promo: set name contains "Promo" BUT is a general release (magazine insert, gift, corporate tie-in) — NOT a contest/event award
+- Note: "Corocoro Comics Promo" + "Illustrator" in card name → classify as "event" (illustration contest award)
 
 ------------------------------------------------
 EFFECT TEXT RULE
@@ -657,7 +684,9 @@ Do not include explanations.
   "grading_company": "PSA | CGC | BGS | ACE | null",
   "grade": "10 | 9.5 | 9 | null",
   "grade_label": "GEM MT | PRISTINE | MINT | null",
+  "variant": "标签上注明的变体信息（如 '2023 Champ. World Finals'、'Gold'、'Alt Art' 等），多个用逗号分隔，无则 null",
   "cert_number": "证书编号或 null",
+  "release_type": "pack | promo | event | tournament | null",
   "ocr_raw": "标签或卡面关键文字",
   "confidence": "high | medium | low",
   "related_cards": [
@@ -1305,7 +1334,7 @@ async function queryTCGPlayerPrice(card) {
   }
 }
 
-// --- 根据 JustTCG 价格历史生成 QuickChart.io 折线图 URL ---
+// --- 根据价格历史生成 QuickChart.io 折线图 URL ---
 function generatePriceChartUrl(priceHistory, cardName) {
   if (!priceHistory?.length) return null;
 
@@ -1360,17 +1389,105 @@ function generatePriceChartUrl(priceHistory, cardName) {
 }
 
 // ============================================================
-// eBay Finding API - 真实成交记录查询
+// eBay API 模块（OAuth Client Credentials + Finding API 成交记录）
 // ============================================================
+
+// Token 缓存（有效期 2 小时，提前 1 分钟刷新）
+let ebayTokenCache = { token: null, expiresAt: 0 };
+// eBay 查询结果缓存（同一关键词 30 分钟内不重复请求）
+const ebayQueryCache = new Map();
+// 简单请求队列：同一时刻最多 1 个并发 eBay 请求，间隔 1 秒
+let ebayLastCallAt = 0;
+const EBAY_MIN_INTERVAL_MS = 1000;
+// Rate limit 冷却：被限流后暂停 30 分钟
+let ebayRateLimitedUntil = 0;
+let ebayLock = false;
+
+function ebayIsSandbox() {
+  const appId = process.env.EBAY_APP_ID || '';
+  return process.env.EBAY_SANDBOX === 'true'
+    || appId.includes('-SBX-')
+    || appId.toLowerCase().includes('sandbox');
+}
+
+async function getEbayToken() {
+  if (ebayTokenCache.token && Date.now() < ebayTokenCache.expiresAt) {
+    return ebayTokenCache.token;
+  }
+
+  const clientId = process.env.EBAY_APP_ID;
+  const clientSecret = process.env.EBAY_CLIENT_SECRET;
+  if (!clientId || clientId === 'your_ebay_app_id_here' || !clientSecret || clientSecret === 'your_ebay_client_secret_here') {
+    return null;
+  }
+
+  const isSandbox = ebayIsSandbox();
+  const tokenUrl = isSandbox
+    ? 'https://api.sandbox.ebay.com/identity/v1/oauth2/token'
+    : 'https://api.ebay.com/identity/v1/oauth2/token';
+
+  const base64 = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+  try {
+    const res = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${base64}`,
+      },
+      body: 'grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope',
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.error(`[eBay OAuth] Failed ${res.status}: ${err.substring(0, 200)}`);
+      return null;
+    }
+
+    const data = await res.json();
+    ebayTokenCache = {
+      token: data.access_token,
+      expiresAt: Date.now() + (data.expires_in - 60) * 1000,
+    };
+    console.log(`[eBay OAuth] Token obtained (${isSandbox ? 'Sandbox' : 'Production'}, expires in ${data.expires_in}s)`);
+    return data.access_token;
+  } catch (e) {
+    console.error(`[eBay OAuth] Error: ${e.message}`);
+    return null;
+  }
+}
+
+// 特殊 sentinel：表示已被限流，让 safeEbayQuery 立即停止所有重试
+const EBAY_RATE_LIMITED = Symbol('EBAY_RATE_LIMITED');
+
 async function queryEbaySoldHistory(keyword) {
+  // 被限流冷却中，直接跳过
+  if (Date.now() < ebayRateLimitedUntil) {
+    const remaining = Math.ceil((ebayRateLimitedUntil - Date.now()) / 60000);
+    console.warn(`[eBay] Rate limited, cooling down ${remaining} min`);
+    return EBAY_RATE_LIMITED;
+  }
+
+  // 命中缓存则直接返回（6 小时内同关键词不重复请求）
+  const cacheKey = keyword.toLowerCase();
+  const cached = ebayQueryCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 6 * 60 * 60 * 1000) {
+    console.log(`[eBay] Cache hit for "${keyword}"`);
+    return cached.data;
+  }
+
   const appId = process.env.EBAY_APP_ID;
   if (!appId || appId === 'your_ebay_app_id_here') return null;
 
-  // 自动检测：Sandbox App ID 包含 "sandbox" 或 "-SBX-"
-  const isSandbox = process.env.EBAY_SANDBOX === 'true'
-    || appId.toLowerCase().includes('sandbox')
-    || appId.includes('-SBX-');
-  const baseUrl = isSandbox
+  // 限速：两次请求间隔至少 1 秒
+  const now = Date.now();
+  const wait = EBAY_MIN_INTERVAL_MS - (now - ebayLastCallAt);
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  ebayLastCallAt = Date.now();
+
+  const isSandbox = ebayIsSandbox();
+  // Finding API findCompletedItems：唯一能准确获取真实成交价的接口
+  const findingUrl = isSandbox
     ? 'https://svcs.sandbox.ebay.com/services/search/FindingService/v1'
     : 'https://svcs.ebay.com/services/search/FindingService/v1';
 
@@ -1388,17 +1505,30 @@ async function queryEbaySoldHistory(keyword) {
   });
 
   try {
-    const requestUrl = `${baseUrl}?${params}`;
-    console.log(`[eBay] Requesting: ${isSandbox ? 'SANDBOX' : 'PROD'} keyword="${keyword}"`);
-    const response = await fetch(requestUrl);
+    console.log(`[eBay] Finding API ${isSandbox ? 'SANDBOX' : 'PROD'} keyword="${keyword}"`);
+    const response = await fetch(`${findingUrl}?${params}`);
+
     if (!response.ok) {
       const errText = await response.text();
       console.error(`[eBay] HTTP ${response.status}: ${errText.substring(0, 300)}`);
+      // 被限流：冷却 30 分钟，通知 safeEbayQuery 停止后续 fallback
+      if (response.status === 500 && errText.includes('10001')) {
+        ebayRateLimitedUntil = Date.now() + 30 * 60 * 1000;
+        console.warn('[eBay] Rate limit hit, pausing all eBay queries for 30 min');
+        return EBAY_RATE_LIMITED;
+      }
       return null;
     }
-    const data = await response.json();
-    const items = data?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
 
+    const data = await response.json();
+    const ack = data?.findCompletedItemsResponse?.[0]?.ack?.[0];
+    if (ack !== 'Success' && ack !== 'Warning') {
+      const errMsg = data?.findCompletedItemsResponse?.[0]?.errorMessage?.[0]?.error?.[0]?.message?.[0] || ack;
+      console.error(`[eBay] Finding API error: ${errMsg}`);
+      return null;
+    }
+
+    const items = data?.findCompletedItemsResponse?.[0]?.searchResult?.[0]?.item || [];
     const sold = items
       .filter(item => item.sellingStatus?.[0]?.sellingState?.[0] === 'EndedWithSales')
       .map(item => ({
@@ -1410,11 +1540,99 @@ async function queryEbaySoldHistory(keyword) {
       .filter(item => item.price > 0)
       .sort((a, b) => new Date(a.date) - new Date(b.date));
 
-    console.log(`[eBay] keyword="${keyword}" → ${sold.length} sold items`);
-    return sold.length > 0 ? sold : null;
+    console.log(`[eBay] Finding API → ${sold.length} sold items`);
+    const result = sold.length > 0 ? sold : null;
+    ebayQueryCache.set(cacheKey, { data: result, ts: Date.now() });
+    return result;
   } catch (e) {
     console.error(`[eBay] query error: ${e.message}`);
     return null;
+  }
+}
+
+// 双阶段过滤异常价格
+// 第一阶段：百分位截断（去掉最低 10% 和最高 10%）
+// 第二阶段：中位数倍数限制（价格必须在中位数的 0.2x ~ 5x 之间）
+function filterEbayOutliers(items) {
+  if (!items || items.length < 4) return items;
+
+  const sorted = [...items].sort((a, b) => a.price - b.price);
+
+  // 阶段一：去掉底部和顶部 10%
+  const trimCount = Math.max(1, Math.floor(sorted.length * 0.1));
+  const trimmed = sorted.slice(trimCount, sorted.length - trimCount);
+
+  // 阶段二：中位数倍数限制
+  const mid = trimmed[Math.floor(trimmed.length / 2)].price;
+  const lo = mid * 0.2;
+  const hi = mid * 5;
+  const filtered = trimmed.filter(i => i.price >= lo && i.price <= hi);
+
+  console.log(`[eBay] Outlier filter: ${items.length} → ${filtered.length} items (median $${mid.toFixed(0)}, range $${lo.toFixed(0)}~$${hi.toFixed(0)})`);
+  return filtered.length >= 2 ? filtered : trimmed;
+}
+
+// 并发锁 + fallback 关键词的安全查询入口
+async function safeEbayQuery(card) {
+  // 等待锁释放（最多等 10 秒）
+  const lockTimeout = Date.now() + 10000;
+  while (ebayLock) {
+    if (Date.now() > lockTimeout) {
+      console.warn('[eBay] Lock timeout, skipping query');
+      return null;
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+
+  ebayLock = true;
+  try {
+    const skw = card.search_keywords || {};
+    const cardName = card.name_en || card.name_cn || '';
+    const gameTag = card.game === 'pokemon' ? 'Pokemon card'
+      : card.game === 'onepiece' ? 'One Piece card'
+      : card.game === 'yugioh' ? 'Yu-Gi-Oh card'
+      : 'trading card';
+    // 包含 grade_label（如 PRISTINE）让关键词更精准
+    const gradingSuffix = card.grading_company
+      ? [card.grading_company, card.grade_label, card.grade].filter(Boolean).join(' ')
+      : '';
+
+    const setName = card.set_name || '';
+    const cardNumber = (card.card_number || '').split('/')[0].trim();
+    // variant：来自标签的变体信息（如 "2023 Champ. World Finals"）
+    const variantStr = card.variant || '';
+
+    // 第一次：{卡名} {系列} {variant} {编号} {评级}（与 Google/eBay 链接完全一致）
+    const primaryKeyword = [cardName, setName, variantStr, cardNumber, gradingSuffix].filter(Boolean).join(' ');
+    let result = await queryEbaySoldHistory(primaryKeyword);
+
+    // 被限流 → 立刻停止所有 fallback
+    if (result === EBAY_RATE_LIMITED) return null;
+
+    // Fallback 1：去掉系列名，保留 variant + 编号 + 评级
+    if (!result) {
+      const fallback1 = [cardName, variantStr, cardNumber, gradingSuffix].filter(Boolean).join(' ');
+      if (fallback1 !== primaryKeyword) {
+        console.log(`[eBay] Fallback 1: "${fallback1}"`);
+        result = await queryEbaySoldHistory(fallback1);
+        if (result === EBAY_RATE_LIMITED) return null;
+      }
+    }
+
+    // Fallback 2：仅角色名 + 评级（最宽松）
+    if (!result) {
+      const charName = skw.character || cardName;
+      const fallback2 = [charName, gradingSuffix].filter(Boolean).join(' ');
+      if (fallback2 !== primaryKeyword) {
+        console.log(`[eBay] Fallback 2: "${fallback2}"`);
+        result = await queryEbaySoldHistory(fallback2);
+        if (result === EBAY_RATE_LIMITED) return null;
+      }
+    }
+
+    return result;
+  } finally {
+    ebayLock = false;
   }
 }
 
@@ -1470,122 +1688,6 @@ function generateEbayChartUrl(soldItems) {
   return `https://quickchart.io/chart?c=${encoded}&width=600&height=200&bkg=white`;
 }
 
-// --- 通用 (JustTCG - 多游戏支持，可选) ---
-async function queryJustTCG(card) {
-  if (!process.env.JUSTTCG_API_KEY) return { found: false };
-  try {
-    // 优先用英文名，备用中文名
-    const searchName = card.name_en || card.name_cn || '';
-    if (!searchName) return { found: false };
-
-    // 构建带超时的请求
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
-    const gameParam = card.game === 'pokemon' ? 'pokemon'
-      : card.game === 'onepiece' ? 'one-piece-card-game'
-      : card.game === 'yugioh' ? 'yugioh'
-      : 'pokemon';
-
-    const resp = await fetch(
-      `https://api.justtcg.com/v1/cards?game=${gameParam}&q=${encodeURIComponent(searchName)}&include_price_history=true&priceHistoryDuration=30d&include_statistics=7d,30d`,
-      {
-        headers: {
-          'X-API-Key': process.env.JUSTTCG_API_KEY,
-          'Accept': 'application/json',
-        },
-        signal: controller.signal,
-      },
-    );
-    clearTimeout(timeout);
-
-    if (!resp.ok) {
-      console.log(`[JustTCG] HTTP ${resp.status}`);
-      return { found: false };
-    }
-
-    const data = await resp.json();
-    if (!data.data?.length) return { found: false };
-
-    // 精确匹配：按卡号 > 系列+稀有度 > 系列名 优先级排序
-    // 卡号只取 "/" 前的数字部分（PSA 标签只显示 "154"，JustTCG 存 "154/172"）
-    const numOnly = (card.card_number || '').split('/')[0].replace(/[^0-9]/g, '');
-    const setKey = (card.set_name || '').toLowerCase();
-    const rarityKey = (card.rarity || '').toLowerCase();
-
-    const scored = data.data.map(m => {
-      let score = 0;
-      const mNum = (m.number || '').split('/')[0].replace(/[^0-9]/g, '');
-      const mSet = (m.set_name || '').toLowerCase();
-      const mRarity = (m.rarity || '').toLowerCase();
-
-      if (numOnly && mNum === numOnly) score += 100;       // 卡号主编号一致
-      if (setKey && mSet.includes(setKey.split(' ')[0])) score += 30;  // 系列名包含
-      if (setKey && mSet === setKey) score += 20;          // 系列名精确匹配（加分）
-      if (rarityKey && mRarity.includes(rarityKey.replace(/\s/g, ''))) score += 20; // 稀有度匹配
-
-      return { m, score };
-    });
-
-    scored.sort((a, b) => b.score - a.score);
-    const matched = scored[0].m;
-    console.log(`[JustTCG] Match scores: ${scored.slice(0, 3).map(s => `"${s.m.name}"(${s.m.number})=${s.score}`).join(', ')}`);
-
-    // 提取所有变体价格（JustTCG 用 v.price）
-    const variants = matched.variants || [];
-    const allPrices = variants
-      .filter(v => v.price != null)
-      .map(v => ({
-        type: `${v.condition || 'Near Mint'} ${v.printing || 'Normal'}`.trim(),
-        market: v.price,
-        low: v.price,
-        high: v.price,
-        priceChange7d: v.priceChange7d ?? null,
-        priceChange30d: v.priceChange30d ?? null,
-        avgPrice7d: v.avgPrice7d ?? null,
-        priceHistory: v.priceHistory ?? null,
-      }));
-
-    // 优先用 Near Mint Normal 作为主要展示
-    const mainPrices = allPrices.find(v => v.type.includes('Near Mint') && v.type.includes('Normal'))
-      || allPrices.find(v => v.type.includes('Near Mint'))
-      || allPrices[0]
-      || null;
-
-    const cardNumber = matched.number || matched.card_number || null;
-    const cardUrl = matched.tcgplayerId
-      ? `https://www.tcgplayer.com/product/${matched.tcgplayerId}`
-      : `https://www.tcgplayer.com/search/all/product?q=${encodeURIComponent(searchName)}`;
-
-    console.log(`[JustTCG] Found: ${matched.name} / ${matched.set_name} / #${cardNumber} / $${mainPrices?.market} / history=${mainPrices?.priceHistory?.length ?? 0}pts`);
-
-    return {
-      found: true,
-      name: matched.name,
-      set: matched.set_name,
-      number: cardNumber,
-      rarity: matched.rarity,
-      image: matched.image_url || null,
-      prices: mainPrices
-        ? { market: mainPrices.market, low: mainPrices.low, high: mainPrices.high }
-        : null,
-      priceChange7d: mainPrices?.priceChange7d ?? null,
-      priceChange30d: mainPrices?.priceChange30d ?? null,
-      avgPrice7d: mainPrices?.avgPrice7d ?? null,
-      priceHistory: mainPrices?.priceHistory ?? null,
-      allVariants: allPrices,
-      url: cardUrl,
-      source: 'JustTCG',
-    };
-  } catch (e) {
-    if (e.name === 'AbortError') {
-      console.log('[JustTCG] Request timeout');
-    } else {
-      console.error('[JustTCG] Error:', e.message);
-    }
-    return { found: false };
-  }
-}
 
 // ============================================================
 // 智能数据源路由器和健康监控
@@ -1648,7 +1750,7 @@ async function queryPokemonWithFallback(card) {
   }
 
   // 所有数据源都失败，返回搜索链接
-  console.log('ℹ️ Pokemon 主数据源不可用，将由 JustTCG 补充价格');
+  console.log('ℹ️ Pokemon 主数据源不可用，返回搜索链接');
 
   // 生成搜索链接
   const searchParts = [card.name_en];
@@ -1708,7 +1810,7 @@ async function getCardPrice(card) {
     case 'yugioh':
       return await queryTCGPlayerPrice(card);
     default:
-      return await queryJustTCG(card);
+      return { found: false, source: 'Unknown game' };
   }
 }
 
@@ -1731,40 +1833,6 @@ function getTypeLabel(type) {
 // ============================================================
 // 收藏价值评估函数
 // ============================================================
-function calculateCollectibleValue(card, priceResult) {
-  // 稀有度评分
-  const rarityScores = {
-    'SEC': 5, 'SSR': 4.5, 'UR': 5, 'CSR': 5,  // 最高稀有度
-    'SR': 3.5, 'SSP': 4, 'RAR': 3,  // 高稀有度
-    'RR': 2.5, 'R': 2,  // 中等稀有度
-    'UC': 1.5, 'C': 1, 'N': 1,  // 低稀有度
-    'SVP': 4, 'SA': 3.5,  // 特别版本
-  };
-  const rarityScore = rarityScores[card.rarity?.toUpperCase()] || 1.5;
-
-  // 价格评分
-  let priceScore = 1;
-  if (priceResult && priceResult.prices) {
-    // 获取第一个可用的市场价格
-    const firstPrice = Object.values(priceResult.prices)[0];
-    const marketPrice = firstPrice?.market || firstPrice?.low || firstPrice?.mid || 0;
-
-    if (marketPrice > 100) priceScore = 5;
-    else if (marketPrice > 50) priceScore = 4;
-    else if (marketPrice > 20) priceScore = 3;
-    else if (marketPrice > 5) priceScore = 2;
-    else if (marketPrice > 1) priceScore = 1.5;
-  }
-
-  // 综合评分 (0-5 分)
-  const totalScore = (rarityScore + priceScore) / 2;
-
-  if (totalScore >= 4.5) return { level: '⭐⭐⭐⭐⭐', label: '收藏级珍品', color: 0xffd700 };
-  if (totalScore >= 3.5) return { level: '⭐⭐⭐⭐', label: '高收藏价值', color: 0xffa500 };
-  if (totalScore >= 2.5) return { level: '⭐⭐⭐', label: '中等收藏价值', color: 0xffff00 };
-  if (totalScore >= 1.5) return { level: '⭐⭐', label: '普通卡牌', color: 0xcccccc };
-  return { level: '⭐', label: '基础卡牌', color: 0x999999 };
-}
 
 // ============================================================
 // 市场资讯查询函数
@@ -1802,6 +1870,141 @@ async function getCardMarketInfo(card) {
     console.error('Market info search error:', e.message);
   }
   return null;
+}
+
+// ============================================================
+// 收藏价值多维评分系统
+// ============================================================
+const POKEMON_RARITY_SCORE = {
+  'Common': 1, 'Uncommon': 2, 'Rare': 3, 'Holo Rare': 3.5,
+  'Double Rare': 3.8, 'Illustration Rare': 4, 'Art Rare': 4,
+  'Full Art': 4, 'Ultra Rare': 4.5, 'SAR': 5, 'Secret Rare': 5, 'Gold': 5,
+};
+const ONEPIECE_RARITY_SCORE = {
+  'C': 1, 'UC': 2, 'R': 3, 'SR': 4, 'SEC': 4.8,
+  'L': 3.5, 'SP': 5, 'Gold': 5, 'Manga': 6,
+};
+const VARIANT_SCORE = {
+  normal: 1, full_art: 1.5, alt_art: 2, gold: 2.5, sp: 3, manga: 4,
+};
+const RELEASE_SCORE = { pack: 1, promo: 2, event: 3, tournament: 4 };
+const TOP_CHARACTERS = [
+  'charizard', 'pikachu', 'mewtwo', 'umbreon', 'eevee', 'gengar',
+  'luffy', 'zoro', 'shanks', 'ace', 'whitebeard', 'kaido',
+];
+
+function getRarityScore(card) {
+  const r = (card.rarity || '').trim();
+  const rt = (card.release_type || '').toLowerCase();
+
+  if (card.game === 'onepiece') return ONEPIECE_RARITY_SCORE[r] || 2;
+
+  // Promo + event/tournament = 竞赛奖品卡（极其稀有），与普通促销卡区别对待
+  if (r.toLowerCase() === 'promo') {
+    const name = (card.name_en || card.name_cn || card.name_jp || '').toLowerCase();
+    const set  = (card.set_name || '').toLowerCase();
+    const isContestAward = rt === 'tournament' || rt === 'event'
+      || name.includes('illustrator') || set.includes('illustrator')
+      || name.includes('contest') || set.includes('contest')
+      || name.includes('award') || set.includes('award');
+    if (rt === 'tournament') return 6;
+    if (isContestAward) return 5.5; // event 或关键词匹配的竞赛奖品卡
+    return 2; // 普通促销卡（如麦当劳联名）
+  }
+
+  return POKEMON_RARITY_SCORE[r] || 2;
+}
+
+function getVariantScore(card) {
+  const r = (card.rarity || '').toLowerCase();
+  const set = (card.set_name || '').toLowerCase();
+  if (r.includes('manga')) return VARIANT_SCORE.manga;
+  if (r.includes('sp') || set.includes('sp')) return VARIANT_SCORE.sp;
+  if (r.includes('gold') || r.includes('sar') || r.includes('secret')) return VARIANT_SCORE.gold;
+  if (r.includes('alt art') || r.includes('alt_art')) return VARIANT_SCORE.alt_art;
+  if (r.includes('full art') || r.includes('illustration') || r.includes('art rare')) return VARIANT_SCORE.full_art;
+  return VARIANT_SCORE.normal;
+}
+
+function getReleaseScore(card) {
+  const rt = (card.release_type || '').toLowerCase();
+  const set = (card.set_name || '').toLowerCase();
+  const name = (card.name_en || card.name_cn || card.name_jp || '').toLowerCase();
+
+  if (rt === 'tournament' || set.includes('tournament') || set.includes('championship')
+      || set.includes('world finals') || set.includes('world champ')) return RELEASE_SCORE.tournament;
+
+  // 插画比赛/竞赛奖品卡 → event（即使 set_name 含 "promo"）
+  if (rt === 'event' || set.includes('event') || set.includes('league')
+      || name.includes('illustrator') || set.includes('illustrator')
+      || name.includes('contest') || set.includes('contest')
+      || name.includes('award') || set.includes('award')) return RELEASE_SCORE.event;
+
+  if (rt === 'promo' || set.includes('promo') || (card.card_number || '').toUpperCase().includes('PR')) return RELEASE_SCORE.promo;
+  return RELEASE_SCORE.pack;
+}
+
+function getPopularityScore(card) {
+  const name = (card.character_name || card.name_en || card.name_cn || '').toLowerCase();
+  if (TOP_CHARACTERS.some(c => name.includes(c))) return 3;
+  // 主角/知名角色
+  const known = ['nami', 'robin', 'sanji', 'chopper', 'brook', 'franky', 'ussop',
+    'bulbasaur', 'charmander', 'squirtle', 'snorlax', 'mew', 'rayquaza'];
+  if (known.some(c => name.includes(c))) return 2;
+  return 1;
+}
+
+function gradeScore(grade) {
+  if (!grade) return 0;
+  const g = parseFloat(grade);
+  if (g >= 10) return 3;
+  if (g >= 9) return 2;
+  if (g >= 8) return 1;
+  return 0;
+}
+
+function calculateCollectibleValue(card) {
+  const rarity     = getRarityScore(card);
+  const variant    = getVariantScore(card);
+  const release    = getReleaseScore(card);
+  const popularity = getPopularityScore(card);
+  const grade      = gradeScore(card.grade);
+
+  // 基础分：稀有度 + 变体 + 人气 + 评级（不含发行类型）
+  const base = rarity * 0.38 + variant * 0.24 + popularity * 0.22 + grade * 0.10;
+
+  // 发行类型作为乘数：tournament/event 让竞赛奖品卡分数大幅拉高
+  const relMultiplier = release >= 4 ? 1.45   // tournament
+                      : release >= 3 ? 1.25   // event
+                      : release >= 2 ? 1.05   // promo
+                      : 1.00;                 // pack
+
+  const total = base * relMultiplier + release * 0.06;
+
+  if (total >= 3.8) return '收藏级珍品';
+  if (total >= 2.8) return '高收藏价值';
+  if (total >= 1.9) return '中等收藏价值';
+  if (total >= 1.1) return '普通卡牌';
+  return '基础卡牌';
+}
+
+/**
+ * 程序化计算市场热度（5级🔥），基于角色人气 + 稀有度 + 评级 + 发行类型
+ */
+function calculateMarketPopularity(card) {
+  const popularity = getPopularityScore(card);   // 1-3
+  const rarity     = getRarityScore(card);        // 1-6
+  const release    = getReleaseScore(card);        // 1-4
+  const grade      = gradeScore(card.grade);       // 0-3
+
+  // 综合热度分（加权，侧重人气与稀有度）
+  const score = popularity * 0.45 + rarity * 0.30 + release * 0.15 + grade * 0.10;
+  // score 理论范围：min ~0.55 (1*0.45+1*0.30+1*0.15+0*0.10) → max ~4.185 (3+6*0.30+4*0.15+3*0.10)
+  if (score >= 3.5) return '🔥🔥🔥🔥🔥';
+  if (score >= 2.8) return '🔥🔥🔥🔥';
+  if (score >= 2.1) return '🔥🔥🔥';
+  if (score >= 1.4) return '🔥🔥';
+  return '🔥';
 }
 
 function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN', ebaySoldData = null) {
@@ -1847,26 +2050,16 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
     info.push(`${t.release}: ${card.release_date}`);
   }
 
-  if (card.collectible_value) {
-    const valueMap = {
-      '收藏级珍品': '⭐⭐⭐⭐⭐', '高收藏价值': '⭐⭐⭐⭐', '中等收藏价值': '⭐⭐⭐', '普通卡牌': '⭐⭐', '基础卡牌': '⭐',
-      'Collectible gem': '⭐⭐⭐⭐⭐', 'High collectible value': '⭐⭐⭐⭐', 'Medium collectible value': '⭐⭐⭐', 'Normal card': '⭐⭐', 'Basic card': '⭐',
-      'Highly collectible': '⭐⭐⭐⭐', 'Standard card': '⭐⭐', 'Starter card': '⭐',
-      '收藏級珍品': '⭐⭐⭐⭐⭐', '高收藏價值': '⭐⭐⭐⭐', '中等收藏價值': '⭐⭐⭐', '普通卡牌': '⭐⭐', '基礎卡牌': '⭐',
-      '수집 품질': '⭐⭐⭐⭐⭐', '높은 수집 가치': '⭐⭐⭐⭐', '중간 수집 가치': '⭐⭐⭐', '일반 카드': '⭐⭐', '기본 카드': '⭐'
+  {
+    // 用多维评分系统计算，不依赖 Gemini 字符串
+    const calcValue = calculateCollectibleValue(card);
+    const starsMap = {
+      '收藏级珍品': '⭐⭐⭐⭐⭐', '高收藏价值': '⭐⭐⭐⭐',
+      '中等收藏价值': '⭐⭐⭐', '普通卡牌': '⭐⭐', '基础卡牌': '⭐',
     };
-    const stars = valueMap[card.collectible_value] || '⭐⭐';
-    info.push(`${t.collectible}: ${stars}`);
+    info.push(`${t.collectible}: ${starsMap[calcValue]}`);
   }
-  if (card.market_popularity) {
-    const popularityMap = {
-      '超热门': '🔥🔥🔥', '热门': '🔥🔥', '一般': '🔥', '冷门': '❄️',
-      'Super popular': '🔥🔥🔥', 'Very popular': '🔥🔥🔥', 'Popular': '🔥🔥', 'Average': '🔥', 'Moderate': '🔥', 'Niche': '❄️', 'Cold': '❄️',
-      '超熱門': '🔥🔥🔥', '熱門': '🔥🔥', '冷門': '❄️',
-      '초인기': '🔥🔥🔥', '인기': '🔥🔥', '일반': '🔥', '비인기': '❄️'
-    };
-    info.push(`${t.popularity}: ${popularityMap[card.market_popularity] || '🔥'}`);
-  }
+  info.push(`${t.popularity}: ${calculateMarketPopularity(card)}`);
 
   info.push(t.warning);
 
@@ -1912,35 +2105,53 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
   // 搜索链接（优先用 Gemini 提供的 search_keywords）
   const skw = card.search_keywords || {};
   const kwChar = skw.character || card.character_name || card.name_en || card.name_cn || '';
-  const kwCard = skw.card || `${card.name_en || card.name_cn || ''} ${card.card_number || ''}`.trim();
-  const kwFull = skw.full || `${card.name_en || card.name_cn || ''} ${card.set_name || ''} ${card.card_number || ''}`.trim();
-  const gradingSuffix = card.grading_company ? ` ${card.grading_company} ${card.grade ?? ''}`.trim() : '';
+  const variantStr = card.variant || '';
+  // 基础完整关键词（含 variant）
+  const baseKwFull = [
+    card.name_en || card.name_cn || '',
+    card.set_name || '',
+    variantStr,
+    card.card_number || '',
+  ].filter(Boolean).join(' ');
+  const kwFull = skw.full ? `${skw.full} ${variantStr}`.trim() : baseKwFull;
+  // 含 grade_label（PRISTINE / GEM MT）让搜索结果更精准
+  const gradingSuffix = card.grading_company
+    ? [card.grading_company, card.grade_label, card.grade].filter(Boolean).join(' ')
+    : '';
 
   const googleCharUrl = `https://www.google.com/search?q=${encodeURIComponent(kwChar + (card.game === 'pokemon' ? ' pokemon card price' : ' card price'))}`;
-  const googleFullUrl = `https://www.google.com/search?q=${encodeURIComponent(kwFull + ' price')}`;
-  const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(kwCard + gradingSuffix)}&LH_Sold=1`;
+  const fullSearchKw = [kwFull, gradingSuffix].filter(Boolean).join(' ');
+  const googleFullUrl = `https://www.google.com/search?q=${encodeURIComponent(fullSearchKw + ' price')}`;
+  const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(fullSearchKw)}&LH_Sold=1`;
+
+  // 判断是否为拍卖级高价卡（⭐⭐⭐⭐⭐ + tournament/event 发行）
+  const isAuctionTier = calculateCollectibleValue(card) === '收藏级珍品'
+    && ['tournament', 'event'].includes((card.release_type || '').toLowerCase());
+
+  const priceQueryLines = [
+    `[${t.name_only}](${googleCharUrl}) | [${t.full_info}](${googleFullUrl})`,
+    `[${t.ebay_sold}](${ebayUrl})`,
+  ];
 
   embed.addFields({
     name: t.price_query,
-    value: [
-      `[${t.name_only}](${googleCharUrl}) | [${t.full_info}](${googleFullUrl})`,
-      `[${t.ebay_sold}](${ebayUrl})`,
-    ].join('\n'),
+    value: priceQueryLines.join('\n'),
   });
 
   // eBay 真实成交折线图
   if (ebaySoldData && ebaySoldData.length >= 2) {
-    const ebayChartUrl = generateEbayChartUrl(ebaySoldData);
+    const cleanData = filterEbayOutliers(ebaySoldData);
+    const ebayChartUrl = generateEbayChartUrl(cleanData);
     if (ebayChartUrl) {
-      const prices = ebaySoldData.map(i => i.price);
+      const prices = cleanData.map(i => i.price);
       const avgPrice = (prices.reduce((a, b) => a + b, 0) / prices.length).toFixed(2);
       const minP = Math.min(...prices).toFixed(2);
       const maxP = Math.max(...prices).toFixed(2);
       embed.addFields({
         name: t.ebay_chart || '📊 eBay 成交走势',
         value: t.ebay_chart_stats
-          ? t.ebay_chart_stats(ebaySoldData.length, avgPrice, minP, maxP)
-          : `最近 ${ebaySoldData.length} 笔 · 均价 **$${avgPrice}** · 区间 $${minP} ~ $${maxP}`,
+          ? t.ebay_chart_stats(cleanData.length, avgPrice, minP, maxP)
+          : `最近 ${cleanData.length} 笔 · 均价 **$${avgPrice}** · 区间 $${minP} ~ $${maxP}`,
       });
       embed.setImage(ebayChartUrl);
     }
@@ -2136,7 +2347,9 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
     grading_company: card.grading_company ?? null,
     grade: card.grade ?? null,
     grade_label: card.grade_label ?? null,
+    variant: card.variant ?? null,
     cert_number: card.cert_number ?? null,
+    release_type: card.release_type ?? null,
     effect_text: card.effect_text ?? null,
     description: card.description ?? null,
     search_keywords: card.search_keywords ?? null,
@@ -2259,7 +2472,6 @@ async function processCardImage(imageUrl, gameOverride) {
 
     // 将查询结果附到 card 上，供后续翻译时重建 embed 使用
     card.priceResult = priceResult;
-    card.justTcgResult = null;
 
     // 获取市场资讯（异步，不阻塞）
     let marketInfo = null;
@@ -2275,10 +2487,7 @@ async function processCardImage(imageUrl, gameOverride) {
     let ebaySoldData = null;
     if (process.env.EBAY_APP_ID && process.env.EBAY_APP_ID !== 'your_ebay_app_id_here') {
       try {
-        const skw = card.search_keywords || {};
-        const ebayKeyword = skw.card || `${card.name_en || card.name_cn || ''} ${card.card_number || ''}`.trim();
-        const gradingSuffix = card.grading_company ? ` ${card.grading_company} ${card.grade ?? ''}`.trim() : '';
-        ebaySoldData = await queryEbaySoldHistory(ebayKeyword + gradingSuffix);
+        ebaySoldData = await safeEbayQuery(card);
       } catch (e) {
         console.error('eBay query error:', e.message);
       }
@@ -2630,7 +2839,6 @@ discord.login(process.env.DISCORD_TOKEN);
 // │  价格 API: 全部免费                                        │
 // │  • Pokemon TCG API: 免费                                   │
 // │  • OPTCG API: 免费                                         │
-// │  • JustTCG: 免费层可用                                     │
 // │                                                          │
 // │  总计: 小规模 = 完全免费 🎉                                 │
 // └──────────────────────────────────────────────────────────┘
