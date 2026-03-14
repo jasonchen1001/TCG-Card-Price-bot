@@ -2061,8 +2061,6 @@ function buildPriceEmbed(card, priceResult, marketInfo = null, language = 'zh-CN
   }
   info.push(`${t.popularity}: ${calculateMarketPopularity(card)}`);
 
-  info.push(t.warning);
-
   if (info.length) {
     embed.addFields({
       name: t.card_info || '📋 卡牌信息',
@@ -2560,7 +2558,7 @@ discord.on(Events.MessageCreate, async (msg) => {
   }
 
   if (!imageUrl) {
-    msg.reply('请上传卡牌截图，或回复一张包含截图的消息！📸');
+    msg.reply('Please try again — upload a card screenshot, or reply with a message that includes an image and use **!scan** in that message. ⚠️');
     return;
   }
 
