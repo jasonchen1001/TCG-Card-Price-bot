@@ -2506,7 +2506,7 @@ discord.on(Events.MessageCreate, async (msg) => {
 
   const isScan = msg.content.toLowerCase().startsWith('!scan');
   const isSearch = msg.content.toLowerCase().startsWith('!search');
-  const isAuto = msg.channel.name === 'card-pulls';
+  const isAuto = (msg.channel.name || '').toLowerCase() === 'card-search';
   if (!isScan && !isSearch && !isAuto) return;
 
   // 处理 !search 命令
