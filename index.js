@@ -2558,7 +2558,7 @@ discord.on(Events.MessageCreate, async (msg) => {
   }
 
   if (!imageUrl) {
-    msg.reply('Please try again — upload a card screenshot, or reply with a message that includes an image and use **!scan** in that message. ⚠️');
+    msg.reply('⚠️ Please try again — upload a card screenshot, or reply with a message that includes an image and use **!scan** in that message.');
     return;
   }
 
@@ -2569,14 +2569,14 @@ discord.on(Events.MessageCreate, async (msg) => {
 
     // 检查配额用尽
     if (result.quotaExceeded) {
-      await reply.edit('⚠️ **API 配额已用尽！**\n\nGemini 免费层每天限制 1000 次请求。请等待约 24 小时后重试，或配置付费 API。');
+      await reply.edit('⚠️ **API Quota Exhausted!**\n\nGemini free tier limits 1000 requests per day. Please wait about 24 hours before retrying, or configure a paid API.');
       return;
     }
 
     const { cards, embeds } = result;
 
     if (!cards.length) {
-      await reply.edit('😅 没有识别出卡牌，请尝试更清晰的截图。');
+      await reply.edit('⚠️Please try again — upload a card screenshot, or reply with a message that includes an image and use **!scan** in that message.');
       return;
     }
 
@@ -2686,7 +2686,7 @@ discord.on(Events.InteractionCreate, async (i) => {
     } catch (error) {
       console.error('Translation button error:', error);
       await i.editReply({
-        content: '❌ 翻译失败，请稍后重试。',
+        content: '❌ Translation failed, please try again later.',
         components: [createTranslationButtons()]
       });
     }
@@ -2710,7 +2710,7 @@ discord.on(Events.InteractionCreate, async (i) => {
 
         const { cards, embeds } = result;
 
-        if (!cards.length) return i.editReply('😅 没有识别出卡牌，请尝试更清晰的截图。');
+        if (!cards.length) return i.editReply('⚠️ No cards detected, please try a clearer screenshot.');
 
         console.log('📤 Sending reply with translation buttons...');
         const sentMsg = await i.editReply({
@@ -2719,7 +2719,7 @@ discord.on(Events.InteractionCreate, async (i) => {
         });
         cacheCardDataForMessage(sentMsg.id, cards.slice(0, 10));
         console.log('✅ Reply sent with buttons');
-      } catch (e) { console.error(e); await i.editReply('❌ 出错了，请稍后重试'); }
+      } catch (e) { console.error(e); await i.editReply('❌ Error, please try again later.'); }
     }
 
     // search 命令处理
@@ -2743,7 +2743,7 @@ discord.on(Events.InteractionCreate, async (i) => {
         cacheSearchDataForMessage(sentMsg.id, searchResult, query, game);
       } catch (e) {
         console.error('[Search] Error:', e);
-        await i.editReply('❌ 搜索出错了，请稍后重试。');
+        await i.editReply('❌ Search error, please try again later.');
       }
     }
 
